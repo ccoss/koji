@@ -1,0 +1,77 @@
+#! /bin/sh /usr/share/dpatch/dpatch-run
+## debian-dir.dpatch by Suchun Chen <chensuchun@ccoss.com.cn>
+##
+## All lines beginning with `## DP:' are a description of the patch.
+## DP: No description.
+
+@DPATCH@
+diff -urNad '--exclude=CVS' '--exclude=.svn' '--exclude=.git' '--exclude=.arch' '--exclude=.hg' '--exclude=_darcs' '--exclude=.bzr' koji-1.6.0~/builder/Makefile koji-1.6.0/builder/Makefile
+--- koji-1.6.0~/builder/Makefile	2010-12-17 05:13:17.000000000 +0800
++++ koji-1.6.0/builder/Makefile	2011-04-20 17:27:18.000000000 +0800
+@@ -22,9 +22,8 @@
+ 	mkdir -p $(DESTDIR)/usr/libexec/kojid
+ 	install -p -m 755 $(LIBEXECFILES) $(DESTDIR)/usr/libexec/kojid
+ 
+-	mkdir -p $(DESTDIR)/etc/mock/koji
+-	mkdir -p $(DESTDIR)/etc/rc.d/init.d
+-	install -p -m 755 kojid.init $(DESTDIR)/etc/rc.d/init.d/kojid
++	mkdir -p $(DESTDIR)/etc/init.d
++	install -p -m 755 kojid.init $(DESTDIR)/etc/init.d/kojid
+ 
+ 	mkdir -p $(DESTDIR)/etc/sysconfig
+ 	install -p -m 644 kojid.sysconfig $(DESTDIR)/etc/sysconfig/kojid
+diff -urNad '--exclude=CVS' '--exclude=.svn' '--exclude=.git' '--exclude=.arch' '--exclude=.hg' '--exclude=_darcs' '--exclude=.bzr' koji-1.6.0~/hub/Makefile koji-1.6.0/hub/Makefile
+--- koji-1.6.0~/hub/Makefile	2011-04-20 17:25:37.000000000 +0800
++++ koji-1.6.0/hub/Makefile	2011-04-20 17:25:55.000000000 +0800
+@@ -26,8 +26,8 @@
+ 	mkdir -p $(DESTDIR)/usr/libexec/koji-hub
+ 	install -p -m 755 $(LIBEXECFILES) $(DESTDIR)/usr/libexec/koji-hub
+ 
+-	mkdir -p $(DESTDIR)/etc/httpd/conf.d
+-	install -p -m 644 httpd.conf $(DESTDIR)/etc/httpd/conf.d/kojihub.conf
++	mkdir -p $(DESTDIR)/etc/apache2/sites-available/
++	install -p -m 644 httpd.conf $(DESTDIR)/etc/apache2/sites-available/kojihub.conf
+ 
+ 	mkdir -p $(DESTDIR)/etc/koji-hub
+ 	install -p -m 644 hub.conf $(DESTDIR)/etc/koji-hub/hub.conf
+diff -urNad '--exclude=CVS' '--exclude=.svn' '--exclude=.git' '--exclude=.arch' '--exclude=.hg' '--exclude=_darcs' '--exclude=.bzr' koji-1.6.0~/util/Makefile koji-1.6.0/util/Makefile
+--- koji-1.6.0~/util/Makefile	2010-12-17 05:13:17.000000000 +0800
++++ koji-1.6.0/util/Makefile	2011-04-20 17:27:39.000000000 +0800
+@@ -15,8 +15,8 @@
+ 	mkdir -p $(DESTDIR)/usr/sbin
+ 	install -p -m 755 $(BINFILES) $(DESTDIR)/usr/sbin
+ 
+-	mkdir -p $(DESTDIR)/etc/rc.d/init.d
+-	install -p -m 755 kojira.init $(DESTDIR)/etc/rc.d/init.d/kojira
++	mkdir -p $(DESTDIR)/etc/init.d
++	install -p -m 755 kojira.init $(DESTDIR)/etc/init.d/kojira
+ 
+ 	mkdir -p $(DESTDIR)/etc/sysconfig
+ 	install -p -m 644 kojira.sysconfig $(DESTDIR)/etc/sysconfig/kojira
+diff -urNad '--exclude=CVS' '--exclude=.svn' '--exclude=.git' '--exclude=.arch' '--exclude=.hg' '--exclude=_darcs' '--exclude=.bzr' koji-1.6.0~/vm/Makefile koji-1.6.0/vm/Makefile
+--- koji-1.6.0~/vm/Makefile	2010-12-17 05:13:17.000000000 +0800
++++ koji-1.6.0/vm/Makefile	2011-04-20 17:28:48.000000000 +0800
+@@ -24,8 +24,8 @@
+ 	mkdir -p $(DESTDIR)/usr/share/kojivmd
+ 	install -p -m 644 $(SHAREFILES) $(DESTDIR)/usr/share/kojivmd
+ 
+-	mkdir -p $(DESTDIR)/etc/rc.d/init.d
+-	install -p -m 755 kojivmd.init $(DESTDIR)/etc/rc.d/init.d/kojivmd
++	mkdir -p $(DESTDIR)/etc/init.d
++	install -p -m 755 kojivmd.init $(DESTDIR)/etc/init.d/kojivmd
+ 
+ 	mkdir -p $(DESTDIR)/etc/sysconfig
+ 	install -p -m 644 kojivmd.sysconfig $(DESTDIR)/etc/sysconfig/kojivmd
+diff -urNad '--exclude=CVS' '--exclude=.svn' '--exclude=.git' '--exclude=.arch' '--exclude=.hg' '--exclude=_darcs' '--exclude=.bzr' koji-1.6.0~/www/conf/Makefile koji-1.6.0/www/conf/Makefile
+--- koji-1.6.0~/www/conf/Makefile	2011-04-20 17:25:37.000000000 +0800
++++ koji-1.6.0/www/conf/Makefile	2011-04-20 17:25:55.000000000 +0800
+@@ -12,7 +12,7 @@
+ 		exit 1; \
+ 	fi
+ 
+-	mkdir -p $(DESTDIR)/etc/httpd/conf.d
+-	install -p -m 644 kojiweb.conf $(DESTDIR)/etc/httpd/conf.d/kojiweb.conf
++	mkdir -p $(DESTDIR)/etc/apache2/sites-available/
++	install -p -m 644 kojiweb.conf $(DESTDIR)/etc/apache2/sites-available/kojiweb.conf
+ 
+ 	mkdir -p $(DESTDIR)/etc/kojiweb

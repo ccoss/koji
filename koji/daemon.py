@@ -734,6 +734,8 @@ class TaskManager(object):
         for task in tasks:
             # note: tasks are in priority order
             self.logger.debug("task: %r" % task)
+            # if task['method'].split("::")[0] != self.options.pm_name:
+            #     continue
             if task['method'] not in self.handlers:
                 self.logger.warn("Skipping task %(id)i, no handler for method %(method)s", task)
                 continue

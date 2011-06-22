@@ -1,0 +1,4 @@
+usr/share/koji-hub/*
+usr/libexec/koji-hub/rpmdiff
+etc/koji-hub/hub.conf
+etc/apache2/sites-available/kojihub.conf

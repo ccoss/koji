@@ -1,0 +1,3 @@
+usr/lib/koji-hub-plugins/*
+etc/koji-hub/plugins/*
+

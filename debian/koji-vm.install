@@ -1,0 +1,5 @@
+usr/sbin/kojivmd
+etc/kojivmd/kojivmd.conf
+etc/sysconfig/kojivmd
+etc/init.d/kojivmd
+usr/share/kojivmd/kojikamid

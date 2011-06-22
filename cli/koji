@@ -502,15 +502,16 @@ def handle_add_group(options, session, args):
     
 def handle_add_host(options, session, args):
     "[admin] Add a host"
-    usage = _("usage: %prog add-host [options] hostname arch [arch2 ...]")
+    usage = _("usage: %prog add-host [options] hostname packagemanager  arch [arch2 ...]")
     usage += _("\n(Specify the --help global option for a list of other help options)")
     parser = OptionParser(usage=usage)
     parser.add_option("--krb-principal", help=_("set a non-default kerberos principal for the host"))
     (options, args) = parser.parse_args(args)
-    if len(args) < 2:
-        parser.error(_("Please specify a hostname and at least one arch"))
+    if len(args) < 3:
+        parser.error(_("Please specify a hostname with packagemanager and at least one arch"))
         assert False
     host = args[0]
+    pmanager = args[1]
     activate_session(session)
     id = session.getHost(host)
     if id:
@@ -530,6 +531,7 @@ def handle_edit_host(options, session, args):
     usage += _("\n(Specify the --help global option for a list of other help options)")
     parser = OptionParser(usage=usage)
     parser.add_option("--arches", help=_("Space-separated list of supported architectures"))
+    parser.add_option("--pm_name", help=_("Package manager name"))
     parser.add_option("--capacity", type="float", help=_("Capacity of this host"))
     parser.add_option("--description", metavar="DESC", help=_("Description of this host"))
     parser.add_option("--comment", help=_("A brief comment about this host"))
@@ -677,18 +679,27 @@ def handle_add_pkg(options, session, args):
     opts['block'] = False
     # check if list of packages exists for that tag already
     dsttag=session.getTag(tag)
+    allpkg = dict([(p['package_name'], p['pm_name']) for p in session.listPackages()])
     pkglist = dict([(p['package_name'], p['package_id']) for p in session.listPackages(tagID=dsttag['id'])])
     ret = 0
+    pkg2add = args[1:]
     for package in args[1:]:
         package_id = pkglist.get(package, None)
+        package_pm = allpkg.get(package, None)
         if not package_id is None:
             print "Package %s already exists in tag %s" % (package, tag)
-            ret = 1
-    if ret:
-        return ret
+            pkg2add.remove(package)
+            continue
+        package_pm = allpkg.get(package, None)
+        if not package_pm is None:
+            if package_pm != dsttag['pm_name']:
+                pkg2add.remove(package)
+                print "Package(%s)'s manager name is inconsistent with the tag(%s)'s"%(package, tag)
+        else:
+            print "package_pm is None"
     if options.extra_arches:
         opts['extra_arches'] = ' '.join(options.extra_arches.replace(',',' ').split())
-    for package in args[1:]:
+    for package in pkg2add:
         #really should implement multicall...
         session.packageListAdd(tag,package,options.owner,**opts)
 
@@ -799,6 +810,8 @@ def handle_build(options, session, args):
             parser.error(_("--arch_override is only allowed for --scratch builds"))
     activate_session(session)
     target = args[0]
+    source = args[1]
+    dest_tag = None
     if target.lower() == "none" and build_opts.repo_id:
         target = None
         build_opts.skip_tag = True
@@ -811,7 +824,6 @@ def handle_build(options, session, args):
             parser.error(_("Unknown destination tag: %s" % build_target['dest_tag_name']))
         if dest_tag['locked'] and not build_opts.scratch:
             parser.error(_("Destination tag %s is locked" % dest_tag['name']))
-    source = args[1]
     opts = {}
     if build_opts.arch_override:
         opts['arch_override'] = ' '.join(build_opts.arch_override.replace(',',' ').split())
@@ -827,13 +839,21 @@ def handle_build(options, session, args):
     if '://' not in source:
         #treat source as an srpm and upload it
         if not build_opts.quiet:
-            print "Uploading srpm: %s" % source
-        serverdir = _unique_path('cli-build')
+            print "Uploading spkg: %s" % source
+
+        info = koji.createPkgInfo(source).getInfo()
+        pm = session.getPackageManager(info['type'])
+        if dest_tag['pm_name'] != pm['name']:
+            parser.error(_("Package's manager name is inconsistent with the tag's "))
+            return
+
+        serverdir = _unique_path("cli-build/%s"%pm['name'])
         if _running_in_bg() or build_opts.noprogress or build_opts.quiet:
             callback = None
         else:
             callback = _progress_callback
-        session.uploadWrapper(source, serverdir, callback=callback)
+        for f in info['files']:
+            session.uploadWrapper(f['path'], serverdir, callback=callback)
         print
         source = "%s/%s" % (serverdir, os.path.basename(source))
     task_id = session.build(source, target, opts, priority=priority)
@@ -1281,13 +1301,18 @@ def handle_import(options, session, args):
     activate_session(session)
     to_import = {}
     for path in args:
-        data = koji.get_header_fields(path, ('name','version','release','epoch',
-                                    'arch','sigmd5','sourcepackage','sourcerpm'))
+#        data = koji.get_header_fields(path, ('name','version','release','epoch',
+#                                    'arch','sigmd5','sourcepackage','sourcerpm'))
+        #data = koji.get_pkg_info(path)
+        data = koji.createPkgInfo(path).getInfo()
+        res = session.getPackageManager(data['type'])
+        data['pmanager'] = res['name']
+
         if data['sourcepackage']:
             data['arch'] = 'src'
             nvr = "%(name)s-%(version)s-%(release)s" % data
         else:
-            nvr = "%(name)s-%(version)s-%(release)s" % koji.parse_NVRA(data['sourcerpm'])
+            nvr = "%(name)s-%(version)s-%(release)s" % koji.parse_NVRA(data['sourceNVRA'])
         to_import.setdefault(nvr,[]).append((path,data))
     builds_missing = False
     nvrs = to_import.keys()
@@ -1299,47 +1324,71 @@ def handle_import(options, session, args):
                 break
         else:
             #no srpm included, check for build
+            print ("nvr:%s"%nvr)
             binfo = session.getBuild(nvr)
             if not binfo:
-                print _("Missing build or srpm: %s") % nvr
+                print _("Missing build or sourcepackage: %s") % nvr
                 builds_missing = True
     if builds_missing and not options.create_build:
         print _("Aborting import")
         return
 
     #local function to help us out below
-    def do_import(path, data):
-        rinfo = dict([(k,data[k]) for k in ('name','version','release','arch')])
-        prev = session.getRPM(rinfo)
+    def check_pkg(path, data):
+        pinfo = dict([(k,data[k]) for k in ('name','version','release','arch')])
+        result = True
+        prev = session.getPKG(pinfo)
+        now_hash = None
+        if "rpm" == data['type']:
+            now_hash = koji.hex_string(data['sigmd5'])
+        else:
+            now_hash = "%d"%data['size']
         if prev and not prev.get('external_repo_id', 0):
-            if prev['payloadhash'] == koji.hex_string(data['sigmd5']):
-                print _("RPM already imported: %s") % path
+            if prev['payloadhash'] == now_hash:
+                print _("PKG already imported: %s") % path
             else:
                 print _("WARNING: md5sum mismatch for %s") % path
             print _("Skipping import")
+            result = False
+        # TODO check dsc deb file
+        
+        return result
+
+    def do_import(path, data):
+        c = check_pkg(path,data)
+	if not c:
             return
         if options.test:
             print _("Test mode -- skipping import for %s") % path
             return
-        serverdir = _unique_path('cli-import')
+        serverdir = _unique_path("cli-import/%s" % data['pmanager'])
         if options.link:
             old_umask = os.umask(002)
-            dst = "%s/%s/%s" % (koji.pathinfo.work(), serverdir, os.path.basename(path))
-            koji.ensuredir(os.path.dirname(dst))
-            os.chown(os.path.dirname(dst), 48, 48)  #XXX - hack
-            print "Linking rpm to: %s" % dst
-            os.link(path, dst)
-            os.umask(old_umask)
+            files = data['files']
+            ln=[]
+            for f in files:
+                ln.append( (f['path'],"%s/%s/%s" % (koji.pathinfo.work(), serverdir, os.path.basename(f['file']))))
+            for src,dst in ln:
+                koji.ensuredir(os.path.dirname(dst))
+                os.chown(os.path.dirname(dst), 48, 48)  #XXX - hack
+                print "Linking package to: %s" % dst
+                os.link(src, dst)
+                os.umask(old_umask)
         else:
-            print _("uploading %s...") % path,
+            files = data['files']
+            flist = []
+            for f in files:
+                flist.append(f['path'])
+            for f in flist:
+                session.uploadWrapper(f, serverdir)
+                print _("uploading %s...") % f
             sys.stdout.flush()
-            session.uploadWrapper(path, serverdir)
             print _("done")
             sys.stdout.flush()
         print _("importing %s...") % path,
         sys.stdout.flush()
         try:
-            session.importRPM(serverdir, os.path.basename(path))
+            session.importPKG(serverdir, os.path.basename(path))
         except koji.GenericError, e:
             print _("\nError importing: %s" % str(e).splitlines()[-1])
             sys.stdout.flush()
@@ -4028,12 +4077,16 @@ def handle_add_tag(options, session, args):
     parser = OptionParser(usage=usage)
     parser.add_option("--parent", help=_("Specify parent"))
     parser.add_option("--arches", help=_("Specify arches"))
+    parser.add_option("--pmname", help=_("Specify package manager name"))
     parser.add_option("--maven-support", action="store_true", help=_("Enable creation of Maven repos for this tag"))
     parser.add_option("--include-all", action="store_true", help=_("Include all packages in this tag when generating Maven repos"))
     (options, args) = parser.parse_args(args)
     if len(args) != 1:
         parser.error(_("Please specify a name for the tag"))
         assert False
+    if not options.parent and not options.pmname:
+        print "must specify a package manager name"
+        return 
     activate_session(session)
     if not session.hasPerm('admin'):
         print "This action requires admin privileges"
@@ -4043,6 +4096,8 @@ def handle_add_tag(options, session, args):
         opts['parent'] = options.parent
     if options.arches:
         opts['arches'] = ' '.join(options.arches.replace(',',' ').split())
+    if options.pmname:
+        opts['pmname'] = options.pmname
     if options.maven_support:
         opts['maven_support'] = True
     if options.include_all:
@@ -4055,6 +4110,7 @@ def handle_edit_tag(options, session, args):
     usage += _("\n(Specify the --help global option for a list of other help options)")
     parser = OptionParser(usage=usage)
     parser.add_option("--arches", help=_("Specify arches"))
+    parser.add_option("--pmname", help=_("Specify package manager name"))
     parser.add_option("--perm", help=_("Specify permission requirement"))
     parser.add_option("--no-perm", action="store_true", help=_("Remove permission requirement"))
     parser.add_option("--lock", action="store_true", help=_("Lock the tag"))
@@ -4073,6 +4129,8 @@ def handle_edit_tag(options, session, args):
     opts = {}
     if options.arches:
         opts['arches'] = ' '.join(options.arches.replace(',',' ').split())
+    if options.pmname:
+        opts['pmname'] = options.pmname
     if options.no_perm:
         opts['perm_id'] = None
     elif options.perm:

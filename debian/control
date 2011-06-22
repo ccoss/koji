@@ -1,0 +1,70 @@
+Source: koji
+Section: python
+Priority: extra
+Maintainer: Suchun Chen <chensuchun@ccoss.com.cn>
+Build-Depends: debhelper (>= 7.0.50~),python-support, python (>=2.6)
+Standards-Version: 3.8.4
+Homepage: https://fedorahosted.org/koji/
+#Vcs-Git: git://git.debian.org/collab-maint/koji.git
+#Vcs-Browser: http://git.debian.org/?p=collab-maint/koji.git;a=summary
+
+Package: koji
+Architecture: all
+Depends: ${misc:Depends},${python:Depends},
+         python-debian,python-rpm,python-urlgrabber,
+         python-openssl,python-kerberos
+Description: Build system tools 
+ Koji is a system for building and tracking RPMS.
+ The base package contains shared libraries and the command-line interface.
+
+Package: koji-hub
+Architecture: all
+Depends: ${misc:Depends},${python:Depends},
+         apache2,libapache2-mod-python,
+         koji(= ${source:Version}),
+         postgresql,python-pygresql
+Description: Koji XMLRPC interface
+ koji-hub is the XMLRPC interface to the koji database
+
+Package: koji-hub-plugins
+Architecture: all
+Depends: ${misc:Depends},${python:Depends},
+         koji(= ${source:Version}),
+         koji-hub(= ${source:Version})
+Description:Koji hub plugins
+ Plugins to the koji XMLRPC interface 
+
+
+Package: koji-builder
+Architecture: all
+Depends: ${misc:Depends},${python:Depends},
+         koji(= ${source:Version})
+Description: Koji RPM builder daemon
+ koji-builder is the daemon that runs on build machines and executes
+ tasks that come through the Koji system.
+
+
+Package: koji-vm
+Architecture: all
+Depends: ${misc:Depends},${python:Depends},
+         koji(= ${source:Version})
+Description: Koji virtual machine management daemon
+ koji-vm contains a supplemental build daemon that executes certain tasks in a
+ virtual machine. This package is not required for most installations.
+
+
+Package: koji-web
+Architecture: all
+Depends: ${misc:Depends},${python:Depends},
+         libapache2-mod-python,libapache2-mod-auth-kerb,
+         koji(= ${source:Version})
+Description: Koji Web UI
+ koji-web is a web UI to the Koji system.
+
+
+Package: koji-utils
+Architecture: all
+Depends: ${misc:Depends},${python:Depends},
+         koji(= ${source:Version})
+Description:  Koji Utilities
+ Utilities for the Koji system

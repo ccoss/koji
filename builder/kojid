@@ -599,9 +599,9 @@ class BuildRoot(object):
         self.session.host.setBuildRootState(self.id,'EXPIRED')
 
 
-class ChainBuildTask(BaseTaskHandler):
+class RpmChainBuildTask(BaseTaskHandler):
 
-    Methods = ['chainbuild']
+    Methods = ['rpm::chainbuild']
     #mostly just waiting on other tasks
     _taskWeight = 0.1
 
@@ -654,9 +654,9 @@ class ChainBuildTask(BaseTaskHandler):
                     nvrs.append(builds[0]['nvr'])
 
 
-class BuildTask(BaseTaskHandler):
+class RpmBuildTask(BaseTaskHandler):
 
-    Methods = ['build']
+    Methods = ['rpm::build']
     #we mostly just wait on other tasks
     _taskWeight = 0.2
 
@@ -909,9 +909,9 @@ class BuildTask(BaseTaskHandler):
                                        arch='noarch')
         self.wait(task_id)
 
-class BuildArchTask(BaseTaskHandler):
+class RpmBuildArchTask(BaseTaskHandler):
 
-    Methods = ['buildArch']
+    Methods = ['rpm::buildArch']
 
     def weight(self):
         return 1.5
@@ -1043,9 +1043,9 @@ class BuildArchTask(BaseTaskHandler):
 
         return ret
 
-class MavenTask(MultiPlatformTask):
+class RpmMavenTask(MultiPlatformTask):
 
-    Methods = ['maven']
+    Methods = ['rpm::maven']
 
     _taskWeight = 0.2
 
@@ -1134,9 +1134,9 @@ class MavenTask(MultiPlatformTask):
                                                     arch='noarch')
             self.wait(tag_task_id)
 
-class BuildMavenTask(BaseTaskHandler):
+class RpmBuildMavenTask(BaseTaskHandler):
 
-    Methods = ['buildMaven']
+    Methods = ['rpm::buildMaven']
 
     _taskWeight = 1.5
 
@@ -1318,14 +1318,14 @@ class BuildMavenTask(BaseTaskHandler):
                 'logs': logs,
                 'files': output_files}
 
-class WrapperRPMTask(BaseTaskHandler):
+class RpmWrapperRPMTask(BaseTaskHandler):
     """Build a wrapper rpm around jars output from a Maven build.
     Can either be called as a subtask of a maven task or as a separate
     top-level task.  In the latter case it will permanently delete any
     existing rpms associated with the build and replace them with the
     newly-built rpms."""
 
-    Methods = ['wrapperRPM']
+    Methods = ['rpm::wrapperRPM']
 
     _taskWeight = 1.5
 
@@ -1577,7 +1577,7 @@ class WrapperRPMTask(BaseTaskHandler):
 
 class TagBuildTask(BaseTaskHandler):
 
-    Methods = ['tagBuild']
+    Methods = ['::tagBuild']
     #XXX - set weight?
 
     def handler(self, tag_id, build_id, force=False, fromtag=None, ignore_success=False):
@@ -1601,7 +1601,7 @@ class TagBuildTask(BaseTaskHandler):
 
 # A generic task for building cd or disk images. Other handlers should inherit
 # this.
-class ImageTask(BaseTaskHandler):
+class RpmImageTask(BaseTaskHandler):
     Methods = []
 
     def makeImgBuildRoot(self, buildtag, repoinfo, arch, inst_group):
@@ -1804,9 +1804,9 @@ class ImageTask(BaseTaskHandler):
 # into it via the appliance-build group. appliance-creator is then executed 
 # in the chroot to create the appliance image.
 #
-class ApplianceTask(ImageTask):
+class RpmApplianceTask(RpmImageTask):
 
-    Methods = ['createAppliance']
+    Methods = ['rpm::createAppliance']
     _taskWeight = 1.5
 
     def handler(self, arch, target, ksfile, opts=None):
@@ -1918,9 +1918,9 @@ class ApplianceTask(ImageTask):
 # via the livecd-build group. livecd-creator is then executed in the chroot
 # to create the LiveCD image.
 #
-class LiveCDTask(ImageTask):
+class RpmLiveCDTask(RpmImageTask):
 
-    Methods = ['createLiveCD']
+    Methods = ['rpm::createLiveCD']
     _taskWeight = 1.5
 
     def genISOManifest(self, image, manifile):
@@ -2087,9 +2087,9 @@ class LiveCDTask(ImageTask):
                    os.path.join(koji.pathinfo.imageFinalPath(),
                                 koji.pathinfo.livecdRelPath(image_id), isofile)
 
-class BuildSRPMFromSCMTask(BaseTaskHandler):
+class RpmBuildSRPMFromSCMTask(BaseTaskHandler):
 
-    Methods = ['buildSRPMFromSCM']
+    Methods = ['rpm::buildSRPMFromSCM']
     _taskWeight = 1.0
 
     def spec_sanity_checks(self, filename):
@@ -2188,8 +2188,8 @@ class BuildSRPMFromSCMTask(BaseTaskHandler):
 
         return {'srpm': "%s/%s" % (uploadpath, srpm_name)}
 
-class TagNotificationTask(BaseTaskHandler):
-    Methods = ['tagNotification']
+class RpmTagNotificationTask(BaseTaskHandler):
+    Methods = ['rpm::tagNotification']
 
     _taskWeight = 0.1
 
@@ -2274,8 +2274,8 @@ Status: %(status)s\r
 
         return 'sent notification of tag operation %i to: %s' % (self.id, to_addrs)
 
-class BuildNotificationTask(BaseTaskHandler):
-    Methods = ['buildNotification']
+class RpmBuildNotificationTask(BaseTaskHandler):
+    Methods = ['rpm::buildNotification']
 
     _taskWeight = 0.1
 
@@ -2475,8 +2475,8 @@ Build Info: %(weburl)s/buildinfo?buildID=%(build_id)i\r
         return l
 
 
-class NewRepoTask(BaseTaskHandler):
-    Methods = ['newRepo']
+class RpmNewRepoTask(BaseTaskHandler):
+    Methods = ['rpm::newRepo']
     _taskWeight = 0.1
 
     def handler(self, tag, event=None, src=False, debuginfo=False):
@@ -2526,9 +2526,9 @@ class NewRepoTask(BaseTaskHandler):
         self.session.host.repoDone(repo_id, data, **kwargs)
         return repo_id, event_id
 
-class CreaterepoTask(BaseTaskHandler):
+class RpmCreaterepoTask(BaseTaskHandler):
 
-    Methods = ['createrepo']
+    Methods = ['rpm::createrepo']
     _taskWeight = 1.5
 
     def handler(self, repo_id, arch, oldrepo, external_repos=None):
@@ -2634,7 +2634,7 @@ class CreaterepoTask(BaseTaskHandler):
 
 class WaitrepoTask(BaseTaskHandler):
 
-    Methods = ['waitrepo']
+    Methods = ['::waitrepo']
     #mostly just waiting
     _taskWeight = 0.2
 
@@ -2757,6 +2757,7 @@ def get_options():
         if x != 'kojid':
             quit('invalid section found in config file: %s' % x)
     defaults = {'sleeptime': 15,
+                'pm_name': 'dpkg',
                 'maxjobs': 10,
                 'minspace': 8192,
                 'admin_emails': None,

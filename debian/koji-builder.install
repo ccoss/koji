@@ -1,0 +1,8 @@
+etc/kojid
+etc/kojid/kojid.conf
+etc/init.d/kojid
+etc/sysconfig/kojid
+usr/libexec/kojid
+usr/libexec/kojid/mergerepos
+usr/sbin/kojid
+

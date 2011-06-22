@@ -1,0 +1,11 @@
+etc/koji-gc
+etc/koji-gc/koji-gc.conf
+etc/koji-shadow/koji-shadow.conf
+etc/kojira
+etc/kojira/kojira.conf
+etc/init.d/kojira
+etc/sysconfig/kojira
+usr/sbin/koji-gc
+usr/sbin/koji-shadow
+usr/sbin/kojira
+

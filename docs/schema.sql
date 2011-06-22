@@ -1,6 +1,8 @@
 
 -- vim:noet:sw=8
 -- still needs work
+DROP TABLE packagemanager;
+
 DROP TABLE build_notifications;
 
 DROP TABLE log_messages;
@@ -8,7 +10,7 @@ DROP TABLE log_messages;
 DROP TABLE buildroot_listing;
 DROP TABLE imageinfo_listing;
 
-DROP TABLE rpminfo;
+DROP TABLE pkginfo;
 DROP TABLE imageinfo;
 
 DROP TABLE group_package_listing;
@@ -52,6 +54,15 @@ DROP FUNCTION get_event();
 DROP FUNCTION get_event_time(INTEGER);
 
 BEGIN WORK;
+
+-- id,  packagemanger name  package file types
+CREATE TABLE packagemanager (
+	name TEXT UNIQUE NOT NULL PRIMARY KEY,
+	filetypes TEXT 	
+)WITHOUT OIDS;
+
+INSERT INTO packagemanager (name,filetypes) VALUES ('rpm','rpm'); 
+INSERT INTO packagemanager (name,filetypes) VALUES ('dpkg','dsc,deb');
 
 -- We use the events table to sequence time
 -- in the event that the system clock rolls back, event_ids will retain proper sequencing
@@ -196,7 +207,8 @@ CREATE TABLE host (
 	description TEXT,
 	comment TEXT,
 	ready BOOLEAN NOT NULL DEFAULT 'false',
-	enabled BOOLEAN NOT NULL DEFAULT 'true'
+	enabled BOOLEAN NOT NULL DEFAULT 'true',
+	pm_name TEXT NOT NULL REFERENCES packagemanager (name)
 ) WITHOUT OIDS;
 CREATE INDEX HOST_IS_READY_AND_ENABLED ON host(enabled, ready) WHERE (enabled IS TRUE AND ready IS TRUE);
 
@@ -254,7 +266,8 @@ CREATE INDEX task_by_host ON task (host_id);
 -- we mean the package in general, not an individual build
 CREATE TABLE package (
 	id SERIAL NOT NULL PRIMARY KEY,
-	name TEXT UNIQUE NOT NULL
+	name TEXT NOT NULL,
+	pm_name TEXT NOT NULL REFERENCES packagemanager (name)
 ) WITHOUT OIDS;
 
 -- CREATE INDEX package_by_name ON package (name);
@@ -263,7 +276,7 @@ CREATE TABLE package (
 
 -- here we track the built packages
 -- this is at the srpm level, since builds are by srpm
--- see rpminfo for isolated packages
+-- see pkginfo for isolated packages
 -- even though we track epoch, we demand that N-V-R be unique
 -- task_id: a reference to the task creating the build, may be
 --   null, or may point to a deleted task.
@@ -344,6 +357,7 @@ CREATE INDEX tag_inheritance_by_parent ON tag_inheritance (parent_id);
 CREATE TABLE tag_config (
 	tag_id INTEGER NOT NULL REFERENCES tag(id),
 	arches TEXT,
+	pm_name TEXT NOT NULL REFERENCES packagemanager (name),
 	perm_id INTEGER REFERENCES permissions(id),
 	locked BOOLEAN NOT NULL DEFAULT 'false',
 	maven_support BOOLEAN NOT NULL DEFAULT FALSE,
@@ -585,11 +599,11 @@ CREATE TABLE group_package_listing (
 	UNIQUE (group_id,tag_id,package,active)
 ) WITHOUT OIDS;
 
--- rpminfo tracks individual rpms (incl srpms)
+-- pkginfo tracks individual rpms (incl srpms)
 -- buildroot_id can be NULL (for externally built packages)
 -- even though we track epoch, we demand that N-V-R.A be unique
 -- we don't store filename b/c filename should be N-V-R.A.rpm
-CREATE TABLE rpminfo (
+CREATE TABLE pkginfo (
 	id SERIAL NOT NULL PRIMARY KEY,
 	build_id INTEGER REFERENCES build (id),
 	buildroot_id INTEGER REFERENCES buildroot (id),
@@ -602,22 +616,22 @@ CREATE TABLE rpminfo (
 	payloadhash TEXT NOT NULL,
 	size BIGINT NOT NULL,
 	buildtime BIGINT NOT NULL,
-	CONSTRAINT rpminfo_unique_nvra UNIQUE (name,version,release,arch,external_repo_id)
+	CONSTRAINT pkginfo_unique_nvra UNIQUE (name,version,release,arch,external_repo_id)
 ) WITHOUT OIDS;
-CREATE INDEX rpminfo_build ON rpminfo(build_id);
+CREATE INDEX pkginfo_build ON pkginfo(build_id);
 
 -- sighash is the checksum of the signature header
-CREATE TABLE rpmsigs (
-	rpm_id INTEGER NOT NULL REFERENCES rpminfo (id),
+CREATE TABLE pkgsigs (
+	pkg_id INTEGER NOT NULL REFERENCES pkginfo (id),
 	sigkey TEXT NOT NULL,
 	sighash TEXT NOT NULL,
-	CONSTRAINT rpmsigs_no_resign UNIQUE (rpm_id, sigkey)
+	CONSTRAINT pkgsigs_no_resign UNIQUE (pkg_id, sigkey)
 ) WITHOUT OIDS;
 
--- buildroot_listing needs to be created after rpminfo so it can reference it
+-- buildroot_listing needs to be created after pkginfo so it can reference it
 CREATE TABLE buildroot_listing (
 	buildroot_id INTEGER NOT NULL REFERENCES buildroot(id),
-	rpm_id INTEGER NOT NULL REFERENCES rpminfo(id),
+	rpm_id INTEGER NOT NULL REFERENCES pkginfo(id),
 	is_update BOOLEAN NOT NULL DEFAULT FALSE,
 	UNIQUE (buildroot_id,rpm_id)
 ) WITHOUT OIDS;
@@ -626,7 +640,7 @@ CREATE INDEX buildroot_listing_rpms ON buildroot_listing(rpm_id);
 -- tracks the contents of an image
 CREATE TABLE imageinfo_listing (
 	image_id INTEGER NOT NULL REFERENCES imageinfo(id),
-	rpm_id INTEGER NOT NULL REFERENCES rpminfo(id),
+	rpm_id INTEGER NOT NULL REFERENCES pkginfo(id),
 	UNIQUE (image_id, rpm_id)
 ) WITHOUT OIDS;
 CREATE INDEX imageinfo_listing_rpms on imageinfo_listing(rpm_id);
@@ -652,7 +666,7 @@ CREATE TABLE build_notifications (
 
 GRANT SELECT ON build, package, task, tag,
 tag_listing, tag_config, tag_inheritance, tag_packages,
-rpminfo TO PUBLIC;
+pkginfo TO PUBLIC;
 
 -- example code to add initial admins
 -- insert into users (name, usertype, status, krb_principal) values ('admin', 0, 0, 'admin@EXAMPLE.COM');

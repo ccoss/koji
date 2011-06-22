@@ -468,6 +468,7 @@ def make_task(method,arglist,**opts):
         priority: the priority of the task
         assign: a host_id to assign the task to
     """
+    log_error("method=%s"%method)
     if opts.has_key('parent'):
         # for subtasks, we use some of the parent's options as defaults
         fields = ('state','owner','channel_id','priority','arch')
@@ -502,7 +503,10 @@ def make_task(method,arglist,**opts):
     if 'channel' in opts:
         policy_data['req_channel'] = opts['channel']
         req_channel_id = get_channel_id(opts['channel'], strict=True)
-    if method == 'build':
+    #method_main = method[method.rfind("build"):]
+    method_main = method.split("::")[1]
+    log_error("method_main = %s"%method_main)
+    if method_main == 'build':
         # arglist = source, target, [opts]
         args = koji.decode_args2(arglist, ('source', 'target', 'opts'))
         policy_data['source'] = args['source']
@@ -967,7 +971,7 @@ def readPackageList(tagID=None, userID=None, pkgID=None, event=None, inherit=Fal
         raise koji.GenericError, 'tag,user, and/or pkg must be specified'
 
     packages = {}
-    fields = (('package.id', 'package_id'), ('package.name', 'package_name'),
+    fields = (('package.id', 'package_id'), ('package.name', 'package_name'),('package.pm_name', 'pm_name'),
               ('tag.id', 'tag_id'), ('tag.name', 'tag_name'),
               ('users.id', 'owner_id'), ('users.name', 'owner_name'),
               ('extra_arches','extra_arches'),
@@ -1353,6 +1357,8 @@ def _tag_build(tag,build,user_id=None,force=False):
     """
     tag = get_tag(tag, strict=True)
     build = get_build(build, strict=True)
+    if tag['pm_name'] != build['pm_name']:
+        raise koji.TagError, "build's manager name is inconsistent with the tag's"
     if user_id:
         user = get_user(user_id, strict=True)
     else:
@@ -2558,7 +2564,7 @@ def lookup_build_target(info,strict=False,create=False):
     """Get the id,name for build target"""
     return lookup_name('build_target',info,strict,create)
 
-def create_tag(name, parent=None, arches=None, perm=None, locked=False, maven_support=False, maven_include_all=False):
+def create_tag(name, parent=None, arches=None, pmname=None, perm=None, locked=False, maven_support=False, maven_include_all=False):
     """Create a new tag"""
 
     context.session.assertPerm('admin')
@@ -2570,9 +2576,11 @@ def create_tag(name, parent=None, arches=None, perm=None, locked=False, maven_su
         raise koji.GenericError("A tag with the name '%s' already exists" % name)
 
     # Does the parent exist?
+    pm_name = pmname
     if parent:
         parent_tag = get_tag(parent)
         parent_id = parent_tag['id']
+        pm_name = parent_tag['pm_name']
         if not parent_tag:
             raise koji.GenericError("Parent tag '%s' could not be found" % parent)
     else:
@@ -2584,6 +2592,7 @@ def create_tag(name, parent=None, arches=None, perm=None, locked=False, maven_su
     insert = InsertProcessor('tag_config')
     insert.set(tag_id=tag_id, arches=arches, perm_id=perm, locked=locked)
     insert.set(maven_support=maven_support, maven_include_all=maven_include_all)
+    insert.set(pm_name=pm_name)
     insert.make_create()
     insert.execute()
 
@@ -2610,6 +2619,7 @@ def get_tag(tagInfo,strict=False,event=None):
     - locked
     - maven_support
     - maven_include_all
+    - pm_name
 
     If there is no tag matching the given tagInfo, and strict is False,
     return None.  If strict is True, raise a GenericError.
@@ -2618,7 +2628,7 @@ def get_tag(tagInfo,strict=False,event=None):
     in tag_config. A tag whose name appears in the tag table but has no
     active tag_config entry is considered deleted.
     """
-    fields = ('id', 'name', 'perm_id', 'arches', 'locked', 'maven_support', 'maven_include_all')
+    fields = ('id', 'name', 'perm_id', 'arches', 'locked', 'maven_support', 'maven_include_all', 'pm_name')
     q = """SELECT %s FROM tag_config
     JOIN tag ON tag_config.tag_id = tag.id
     WHERE %s
@@ -2643,6 +2653,7 @@ def edit_tag(tagInfo, **kwargs):
     fields changes are provided as keyword arguments:
         name: rename the tag
         arches: change the arch list
+        pm_name: change the package manager name
         locked: lock or unlock the tag
         perm: change the permission requirement
         maven_support: whether Maven repos should be generated for the tag
@@ -2687,7 +2698,7 @@ def edit_tag(tagInfo, **kwargs):
     #check for changes
     data = tag.copy()
     changed = False
-    for key in ('perm_id','arches','locked','maven_support','maven_include_all'):
+    for key in ('perm_id','arches','locked','maven_support','maven_include_all','pm_name'):
         if kwargs.has_key(key) and data[key] != kwargs[key]:
             changed = True
             data[key] = kwargs[key]
@@ -3020,6 +3031,7 @@ def find_build_id(X):
             data.has_key('release')):
         raise koji.GenericError, 'did not provide name, version, and release'
 
+    log_error("NVR:%s"%",".join((data['name'],data['version'],data['release'])))
     c=context.cnx.cursor()
     q="""SELECT build.id FROM build JOIN package ON build.pkg_id=package.id
     WHERE package.name=%(name)s AND build.version=%(version)s
@@ -3029,7 +3041,6 @@ def find_build_id(X):
     #log_error(koji.db._quoteparams(q,data))
     c.execute(q,data)
     r=c.fetchone()
-    #log_error("%r" % r )
     if not r:
         return None
     return r[0]
@@ -3042,6 +3053,7 @@ def get_build(buildInfo, strict=False):
       id: build ID
       package_id: ID of the package built
       package_name: name of the package built
+      pm_name: name of package manager name
       version
       release
       epoch
@@ -3069,7 +3081,7 @@ def get_build(buildInfo, strict=False):
     fields = (('build.id', 'id'), ('build.version', 'version'), ('build.release', 'release'),
               ('build.epoch', 'epoch'), ('build.state', 'state'), ('build.completion_time', 'completion_time'),
               ('build.task_id', 'task_id'), ('events.id', 'creation_event_id'), ('events.time', 'creation_time'),
-              ('package.id', 'package_id'), ('package.name', 'package_name'), ('package.name', 'name'),
+              ('package.id', 'package_id'), ('package.name', 'package_name'), ('package.name', 'name'),('package.pm_name','pm_name'),
               ("package.name || '-' || build.version || '-' || build.release", 'nvr'),
               ('EXTRACT(EPOCH FROM events.time)','creation_ts'),
               ('EXTRACT(EPOCH FROM build.completion_time)','completion_ts'),
@@ -3188,6 +3200,103 @@ def get_rpm(rpminfo, strict=False, multi=False):
             raise koji.GenericError, "No such rpm: %r" % data
         return None
     return ret
+
+def get_pkg(pkginfo, strict=False, multi=False):
+    """Get information about the specified PKG
+
+    pkginfo may be any one of the following:
+    - a int ID
+    - a string N-V-R.A
+    - a string N-V-R.A@location
+    - a map containing 'name', 'version', 'release', and 'arch'
+      (and optionally 'location')
+
+    If specified, location should match the name of an external repo
+
+    A map will be returned, with the following keys:
+    - id
+    - name
+    - version
+    - release
+    - arch
+    - epoch
+    - payloadhash
+    - size
+    - buildtime
+    - build_id
+    - buildroot_id
+    - external_repo_id
+    - external_repo_name
+
+    If there is no RPM with the given ID, None is returned, unless strict
+    is True in which case an exception is raised
+
+    If more than one RPM matches, and multi is True, then a list of results is
+    returned. If multi is False, a single match is returned (an internal one if
+    possible).
+    """
+    fields = (
+        ('pkginfo.id', 'id'),
+        ('build_id', 'build_id'),
+        ('buildroot_id', 'buildroot_id'),
+        ('pkginfo.name', 'name'),
+        ('package.pm_name', 'pmanager'),
+        ('pkginfo.version', 'version'),
+        ('pkginfo.release', 'release'),
+        ('pkginfo.epoch', 'epoch'),
+        ('arch', 'arch'),
+        ('external_repo_id', 'external_repo_id'),
+        ('external_repo.name', 'external_repo_name'),
+        ('payloadhash', 'payloadhash'),
+        ('size', 'size'),
+        ('buildtime', 'buildtime'),
+        )
+    # we can look up by id or NVRA
+    data = None
+    if isinstance(pkginfo,(int,long)):
+        data = {'id': pkginfo}
+    elif isinstance(pkginfo,str):
+        data = koji.parse_NVRA(pkginfo)
+    elif isinstance(pkginfo,dict):
+        data = pkginfo.copy()
+    else:
+        raise koji.GenericError, "Invalid argument: %r" % pkginfo
+    clauses = []
+    if data.has_key('id'):
+        clauses.append("pkginfo.id=%(id)s")
+    else:
+        clauses.append("""pkginfo.name=%(name)s AND pkginfo.version=%(version)s
+        AND pkginfo.release=%(release)s AND arch=%(arch)s""")
+    retry = False
+    if data.has_key('location'):
+        data['external_repo_id'] = get_external_repo_id(data['location'], strict=True)
+        clauses.append("""external_repo_id = %(external_repo_id)i""")
+    elif not multi:
+        #try to match internal first, otherwise first matching external
+        retry = True  #if no internal match
+        orig_clauses = list(clauses)  #copy
+        clauses.append("""external_repo_id = 0""")
+
+    joins = ['external_repo ON pkginfo.external_repo_id = external_repo.id','build ON build_id = build.id','package ON build.pkg_id = package.id']
+
+    query = QueryProcessor(columns=[f[0] for f in fields], aliases=[f[1] for f in fields],
+                           tables=['pkginfo'], joins=joins, clauses=clauses,
+                           values=data)
+    if multi:
+        return query.execute()
+    ret = query.executeOne()
+    if ret:
+        return ret
+    if retry:
+        #at this point we have just an NVRA with no internal match. Open it up to externals
+        query.clauses = orig_clauses
+        ret = query.executeOne()
+    if not ret:
+        if strict:
+            raise koji.GenericError, "No such pkg: %r" % data
+        return None
+    return ret
+
 
 def list_rpms(buildID=None, buildrootID=None, imageID=None, componentBuildrootID=None, hostID=None, arches=None, queryOpts=None):
     """List RPMS.  If buildID, imageID and/or buildrootID are specified,
@@ -3703,9 +3812,10 @@ def get_host(hostInfo, strict=False):
     - comment
     - ready
     - enabled
+    - pm_name
     """
     fields = ('id', 'user_id', 'name', 'arches', 'task_load',
-              'capacity', 'description', 'comment', 'ready', 'enabled')
+              'capacity', 'description', 'comment', 'ready', 'enabled', 'pm_name')
     query = """SELECT %s FROM host
     WHERE """ % ', '.join(fields)
     if isinstance(hostInfo, int) or isinstance(hostInfo, long):
@@ -3726,6 +3836,7 @@ def edit_host(hostInfo, **kw):
     - capacity
     - description
     - comment
+    - pm_name
 
     Returns True if changes are made to the database, False otherwise.
     """
@@ -3733,7 +3844,7 @@ def edit_host(hostInfo, **kw):
 
     host = get_host(hostInfo, strict=True)
 
-    fields = ('arches', 'capacity', 'description', 'comment')
+    fields = ('arches', 'capacity', 'description', 'comment', 'pm_name')
     changes = []
     for field in fields:
         if field in kw and kw[field] != host[field]:
@@ -3852,11 +3963,32 @@ def list_channels(hostID=None):
         WHERE host_channels.host_id = %(hostID)i"""
     return _multiRow(query, locals(), fields)
 
-def new_package(name,strict=True):
+def get_package_manager(filetype, strict=False):
+    res={}
+    c = context.cnx.cursor()
+    fields = ('name','filetypes')
+    q = "SELECT name,filetypes  FROM packagemanager WHERE filetypes LIKE '%%"
+    q += filetype + "%%'"
+    c.execute(q,locals())
+    row = c.fetchone()
+    #row =  _singleRow(q,locals(),fields)
+    if not row:
+        raise koji.GenericError,"Package Manager Not Find"
+    res['name'] = row[0]
+    res['filetypes'] = row[1]
+    #log_error("types=%s"%res['filetypes'])
+    return res
+
+
+def new_package(data,strict=True):
+    name = data.get('name')
+    pm = get_package_manager(data['type'])
+    pm_name = pm['name']
+    #data['pmanager'] = pm['name']
     c = context.cnx.cursor()
     # TODO - table lock?
     # check for existing
-    q = """SELECT id FROM package WHERE name=%(name)s"""
+    q = """SELECT id FROM package WHERE name=%(name)s AND pm_name=%(pm_name)s"""
     c.execute(q,locals())
     row = c.fetchone()
     if row:
@@ -3867,7 +3999,7 @@ def new_package(name,strict=True):
         q = """SELECT nextval('package_id_seq')"""
         c.execute(q)
         (pkg_id,) = c.fetchone()
-        q = """INSERT INTO package (id,name) VALUES (%(pkg_id)s,%(name)s)"""
+        q = """INSERT INTO package (id,name,pm_name) VALUES (%(pkg_id)s,%(name)s,%(pm_name)s)"""
         context.commit_pending = True
         c.execute(q,locals())
     return pkg_id
@@ -3880,7 +4012,7 @@ def new_build(data):
         name = data.get('name')
         if not name:
             raise koji.GenericError, "No name or package id provided for build"
-        data['pkg_id'] = new_package(name,strict=False)
+        data['pkg_id'] = new_package(data,strict=False)
     for f in ('version','release','epoch'):
         if not data.has_key(f):
             raise koji.GenericError, "No %s value for build" % f
@@ -4119,6 +4251,97 @@ def import_rpm(fn,buildinfo=None,brootid=None,wrapper=False):
 
     return rpminfo
 
+def import_pkg(fn,buildinfo=None,brootid=None,wrapper=False):
+    """Import a single rpm into the database
+
+    Designed to be called from import_build.
+    """
+    if not os.path.exists(fn):
+        raise koji.GenericError, "no such file: %s" % fn
+
+    #read rpm info
+    #hdr = koji.get_rpm_header(fn)
+    #pkginfo = koji.get_header_fields(hdr,['name','version','release','epoch',
+    #                'sourcepackage','arch','buildtime','sourceNVRA'])
+    pkginfo = koji.createPkgInfo(fn).getInfo()
+    if pkginfo['type'] == "rpm":
+        hdr = koji.get_rpm_header(fn)
+
+    if pkginfo['sourcepackage'] == 1:
+        pkginfo['arch'] = "src"
+
+    #sanity check basename
+    basename = os.path.basename(fn)
+    #expected = "%(name)s-%(version)s-%(release)s.%(arch)s.%(type)s" % pkginfo
+    #if basename != expected:
+    #    raise koji.GenericError, "bad filename: %s (expected %s)" % (basename,expected)
+
+    if buildinfo is None:
+        #figure it out for ourselves
+        if pkginfo['sourcepackage'] == 1:
+            buildinfo = pkginfo.copy()
+            build_id = find_build_id(buildinfo)
+            if build_id:
+                # build already exists
+                buildinfo['id'] = build_id
+            else:
+                # create a new build
+                buildinfo['id'] = new_build(pkginfo)
+        else:
+            #figure it out from sourcerpm string
+            buildinfo = get_build(koji.parse_NVRA(pkginfo['sourceNVRA']))
+            if buildinfo is None:
+                #XXX - handle case where package is not a source rpm
+                #      and we still need to create a new build
+                raise koji.GenericError, 'No matching build'
+            state = koji.BUILD_STATES[buildinfo['state']]
+            if state in ('FAILED', 'CANCELED', 'DELETED'):
+                nvr = "%(name)s-%(version)s-%(release)s" % buildinfo
+                raise koji.GenericError, "Build is %s: %s" % (state, nvr)
+    elif not wrapper:
+        # only enforce the srpm name matching the build for non-wrapper rpms
+        spkgname = "%(name)s-%(version)s-%(release)s.src.rpm" % buildinfo
+        #either the sourcerpm field should match the build, or the filename
+        #itself (for the srpm)
+        if pkginfo['sourcepackage'] != 1:
+            if pkginfo['sourceNVRA'] != spkgname:
+                raise koji.GenericError, "spkg mismatch for %s: %s (expected %s)" \
+                        % (fn,pkginfo['sourceNVRA'],spkgname)
+        elif basename != spkgname:
+            raise koji.GenericError, "srpm mismatch for %s: %s (expected %s)" \
+                    % (fn,basename,spkgname)
+
+    #add rpminfo entry
+    pkginfo['id'] = _singleValue("""SELECT nextval('pkginfo_id_seq')""")
+    pkginfo['build'] = buildinfo
+    pkginfo['build_id'] = buildinfo['id']
+    pkginfo['size'] = os.path.getsize(fn)
+    if pkginfo['type'] == "rpm":
+        pkginfo['payloadhash'] = koji.hex_string(hdr[rpm.RPMTAG_SIGMD5])
+    if "dsc,deb".find(pkginfo['type']) >= 0:
+        pkginfo['payloadhash'] = "%d"%pkginfo['size']
+    pkginfo['brootid'] = brootid
+
+    koji.plugin.run_callbacks('preImport', type='rpm', rpm=pkginfo, build=buildinfo,
+                              filepath=fn)
+
+    q = """INSERT INTO pkginfo (id,name,version,release,epoch,
+            build_id,arch,buildtime,buildroot_id,
+            external_repo_id,
+            size,payloadhash)
+    VALUES (%(id)i,%(name)s,%(version)s,%(release)s,%(epoch)s,
+            %(build_id)s,%(arch)s,%(buildtime)s,%(brootid)s,
+            0,
+            %(size)s,%(payloadhash)s)
+    """
+    _dml(q, pkginfo)
+
+    koji.plugin.run_callbacks('postImport', type='rpm', rpm=pkginfo, build=buildinfo,
+                              filepath=fn)
+
+    return pkginfo
+
+
 def add_external_rpm(rpminfo, external_repo, strict=True):
     """Add an external rpm entry to the rpminfo table
 
@@ -4204,6 +4427,21 @@ def import_rpm_file(fn,buildinfo,rpminfo):
     """
     final_path = "%s/%s" % (koji.pathinfo.build(buildinfo),koji.pathinfo.rpm(rpminfo))
     _import_archive_file(fn, os.path.dirname(final_path))
+
+def import_pkg_file(fn,buildinfo,pkginfo):
+    """Move the rpm file into the proper place
+
+    Generally this is done after the db import
+    """
+    src_dst = []
+    buildinfo['pmanager'] = get_package_manager(pkginfo['type'])['name']
+    for f in pkginfo['files']:
+        """path md5sum size"""
+        src_dst.append((f['path'],"%s/%s/%s"%(koji.pathinfo.build(buildinfo),pkginfo['arch'],os.path.basename(f['path']))))
+    for s,d in src_dst:
+        log_error("s:%s  d:%s"%(s,d))
+        _import_archive_file(s, os.path.dirname(d))
+
 
 def import_build_in_place(build):
     """Import a package already in the packages directory
@@ -4527,60 +4765,65 @@ def _generate_maven_metadata(maveninfo, mavendir, contents=None):
                 sumobj.write(sum.hexdigest())
                 sumobj.close()
 
-def add_rpm_sig(an_rpm, sighdr):
+def add_pkg_sig(an_pkg, sighdr):
     """Store a signature header for an rpm"""
     #calling function should perform permission checks, if applicable
-    rinfo = get_rpm(an_rpm, strict=True)
+    rinfo = get_pkg(an_pkg, strict=True)
     if rinfo['external_repo_id']:
         raise koji.GenericError, "Not an internal rpm: %s (from %s)" \
-                % (an_rpm, rinfo['external_repo_name'])
+                % (an_pkg, rinfo['external_repo_name'])
     binfo = get_build(rinfo['build_id'])
     builddir = koji.pathinfo.build(binfo)
     if not os.path.isdir(builddir):
         raise koji.GenericError, "No such directory: %s" % builddir
-    rawhdr = koji.RawHeader(sighdr)
-    sigmd5 = koji.hex_string(rawhdr.get(koji.RPM_SIGTAG_MD5))
-    if sigmd5 == rinfo['payloadhash']:
+    sigkey = ''
+    sighash = 0
+
+    if rinfo['pmanager'] == "rpm":
+        rawhdr = koji.RawHeader(sighdr)
+        sigmd5 = koji.hex_string(rawhdr.get(koji.RPM_SIGTAG_MD5))
+        if sigmd5 == rinfo['payloadhash']:
         # note: payloadhash is a misnomer, that field is populated with sigmd5.
-        sigkey = rawhdr.get(koji.RPM_SIGTAG_GPG)
-        if not sigkey:
-            sigkey = rawhdr.get(koji.RPM_SIGTAG_PGP)
-    else:
+            sigkey = rawhdr.get(koji.RPM_SIGTAG_GPG)
+            if not sigkey:
+                sigkey = rawhdr.get(koji.RPM_SIGTAG_PGP)
+        else:
         # In older rpms, this field in the signature header does not actually match
         # sigmd5 (I think rpmlib pulls it from SIGTAG_GPG). Anyway, this
         # sanity check fails incorrectly for those rpms, so we fall back to
         # a somewhat more expensive check.
         # ALSO, for these older rpms, the layout of SIGTAG_GPG is different too, so
         # we need to pull that differently as well
-        rpm_path = "%s/%s" % (builddir, koji.pathinfo.rpm(rinfo))
-        sigmd5, sigkey = _scan_sighdr(sighdr, rpm_path)
-        sigmd5 = koji.hex_string(sigmd5)
-        if sigmd5 != rinfo['payloadhash']:
-            nvra = "%(name)s-%(version)s-%(release)s.%(arch)s" % rinfo
-            raise koji.GenericError, "wrong md5 for %s: %s" % (nvra, sigmd5)
-    if not sigkey:
-        sigkey = ''
+            rpm_path = "%s/%s" % (builddir, koji.pathinfo.rpm(rinfo))
+            sigmd5, sigkey = _scan_sighdr(sighdr, rpm_path)
+            sigmd5 = koji.hex_string(sigmd5)
+            if sigmd5 != rinfo['payloadhash']:
+                nvra = "%(name)s-%(version)s-%(release)s.%(arch)s" % rinfo
+                raise koji.GenericError, "wrong md5 for %s: %s" % (nvra, sigmd5)
+        if not sigkey:
+            sigkey = ''
         #we use the sigkey='' to represent unsigned in the db (so that uniqueness works)
-    else:
-        sigkey = koji.get_sigpacket_key_id(sigkey)
-    sighash = md5_constructor(sighdr).hexdigest()
-    rpm_id = rinfo['id']
+        else:
+            sigkey = koji.get_sigpacket_key_id(sigkey)
+        sighash = md5_constructor(sighdr).hexdigest()
+    pkg_id = rinfo['id']
     # - db entry
-    q = """SELECT sighash FROM rpmsigs WHERE rpm_id=%(rpm_id)i AND sigkey=%(sigkey)s"""
+    q = """SELECT sighash FROM pkgsigs WHERE pkg_id=%(pkg_id)i AND sigkey=%(sigkey)s"""
     rows = _fetchMulti(q, locals())
     if rows:
         #TODO[?] - if sighash is the same, handle more gracefully
         nvra = "%(name)s-%(version)s-%(release)s.%(arch)s" % rinfo
         raise koji.GenericError, "Signature already exists for package %s, key %s" % (nvra, sigkey)
-    insert = """INSERT INTO rpmsigs(rpm_id, sigkey, sighash)
-    VALUES (%(rpm_id)s, %(sigkey)s, %(sighash)s)"""
+    insert = """INSERT INTO pkgsigs(pkg_id, sigkey, sighash)
+    VALUES (%(pkg_id)s, %(sigkey)s, %(sighash)s)"""
     _dml(insert, locals())
     # - write to fs
-    sigpath = "%s/%s" % (builddir, koji.pathinfo.sighdr(rinfo, sigkey))
-    koji.ensuredir(os.path.dirname(sigpath))
-    fo = file(sigpath, 'wb')
-    fo.write(sighdr)
-    fo.close()
+    if "rpm" == rinfo ['pmanager']:
+        sigpath = "%s/%s" % (builddir, koji.pathinfo.sighdr(rinfo, sigkey))
+        koji.ensuredir(os.path.dirname(sigpath))
+        fo = file(sigpath, 'wb')
+        fo.write(sighdr)
+        fo.close()
 
 def _scan_sighdr(sighdr, fn):
     """Splices sighdr with other headers from fn and queries (no payload)"""
@@ -6362,7 +6605,10 @@ class RootExports(object):
             taskOpts['priority'] = koji.PRIO_DEFAULT + priority
         if channel:
             taskOpts['channel'] = channel
-        return make_task('build',[src, target, opts],**taskOpts)
+        build_target = get_build_target(target) 
+        dest_tag = get_tag(build_target['dest_tag'])
+        buildcmd = "%s::build"%dest_tag['pm_name']
+        return make_task(buildcmd,[src, target, opts],**taskOpts)
 
     def chainBuild(self, srcs, target, opts=None, priority=None, channel=None):
         """Create a chained build task for building sets of packages in order
@@ -6679,7 +6925,8 @@ class RootExports(object):
             if md5sum is not None:
                 if md5sum != md5_constructor(contents).hexdigest():
                     return False
-        uploadpath = koji.pathinfo.work()
+        #uploadpath = koji.pathinfo.work()
+        uploadpath = "/mnt/koji/work"
         #XXX - have an incoming dir and move after upload complete
         # SECURITY - ensure path remains under uploadpath
         path = os.path.normpath(path)
@@ -6930,6 +7177,25 @@ class RootExports(object):
         import_rpm_file(fn,rpminfo['build'],rpminfo)
         add_rpm_sig(rpminfo['id'], koji.rip_rpm_sighdr(fn))
 
+    def importPKG(self, path, basename):
+        """Import an PKG into the database.
+
+        The file must be uploaded first.
+        """
+        context.session.assertPerm('admin')
+        uploadpath = koji.pathinfo.work()
+        fn = "%s/%s/%s" %(uploadpath,path,basename)
+        if not os.path.exists(fn):
+            raise koji.GenericError, "No such file: %s" % fn
+        pkginfo = import_pkg(fn)
+        import_pkg_file(fn,pkginfo['build'],pkginfo)
+        if "rpm" == pkginfo['type']:
+            add_pkg_sig(pkginfo['id'], koji.rip_rpm_sighdr(fn))
+        else:
+            add_pkg_sig(pkginfo['id'], None)
+
+
+
     def addExternalRPM(self, rpminfo, external_repo, strict=True):
         """Import an external RPM
 
@@ -7160,6 +7426,7 @@ class RootExports(object):
         return query.execute()
 
     getBuild = staticmethod(get_build)
+    getPackageManager = staticmethod(get_package_manager)
     getMavenBuild = staticmethod(get_maven_build)
     getWinBuild = staticmethod(get_win_build)
     getArchiveTypes = staticmethod(get_archive_types)
@@ -7580,6 +7847,7 @@ class RootExports(object):
         return self.listRPMs(buildID=build)
 
     getRPM = staticmethod(get_rpm)
+    getPKG = staticmethod(get_pkg)
 
     def getRPMDeps(self, rpmID, depType=None, queryOpts=None):
         """Return dependency information about the RPM with the given ID.
@@ -7773,6 +8041,7 @@ class RootExports(object):
 
         - package_id
         - package_name
+        - pm_name
 
         If tagID, userID, or pkgID are specified, the maps will also contain the
         following keys.
@@ -7785,8 +8054,8 @@ class RootExports(object):
         - blocked
         """
         if tagID is None and userID is None and pkgID is None:
-            query = """SELECT id, name from package"""
-            results = _multiRow(query,{},('package_id', 'package_name'))
+            query = """SELECT id, name, pm_name from package"""
+            results = _multiRow(query,{},('package_id', 'package_name', 'pm_name'))
         else:
             if tagID is not None:
                 tagID = get_tag_id(tagID,strict=True)
@@ -8211,6 +8480,8 @@ class RootExports(object):
         context.session.assertPerm('admin')
         if get_host(hostname):
             raise koji.GenericError, 'host already exists: %s' % hostname
+        pm_name = arches[0]
+        arches = arches[1:]
         q = """SELECT id FROM channels WHERE name = 'default'"""
         default_channel = _singleValue(q)
         if krb_principal is None:
@@ -8223,8 +8494,8 @@ class RootExports(object):
         #host entry
         hostID = _singleValue("SELECT nextval('host_id_seq')", strict=True)
         arches = " ".join(arches)
-        insert = """INSERT INTO host (id, user_id, name, arches)
-        VALUES (%(hostID)i, %(userID)i, %(hostname)s, %(arches)s)"""
+        insert = """INSERT INTO host (id, user_id, name, arches, pm_name)
+        VALUES (%(hostID)i, %(userID)i, %(hostname)s, %(arches)s, %(pm_name)s)"""
         _dml(insert, locals())
         #host_channels entry
         insert = """INSERT INTO host_channels (host_id, channel_id)
@@ -8254,7 +8525,7 @@ class RootExports(object):
         are specified, only hosts with the given value for the respective field will
         be included."""
         fields = ('id', 'user_id', 'name', 'arches', 'task_load',
-                  'capacity', 'ready', 'enabled')
+                  'capacity', 'ready', 'enabled', 'pm_name')
 
         clauses = []
         joins = []

@@ -57,6 +57,8 @@ import ssl.XMLRPCServerProxy
 import OpenSSL.SSL
 import zipfile
 
+from koji.dpkg import DscInfo, DebInfo, PkgInfo
+
 def _(args):
     """Stub function for translation"""
     return args
@@ -1398,7 +1400,7 @@ class PathInfo(object):
 
     def build(self,build):
         """Return the directory where a build belongs"""
-        return self.topdir + ("/packages/%(name)s/%(version)s/%(release)s" % build)
+        return self.topdir + ("/packages/%(pmanager)s/%(name)s/%(version)s/%(release)s" % build)
 
     def mavenbuild(self, build, maveninfo):
         """Return the directory where the Maven build exists in the global store (/mnt/koji/maven2)"""
@@ -1437,6 +1439,10 @@ class PathInfo(object):
         return self.topdir + "/maven2/" + os.path.dirname(self.mavenfile(maveninfo))
 
     def rpm(self,rpminfo):
+        """Return the path (relative to build_dir) where an rpm belongs"""
+        return "%(arch)s/%(name)s-%(version)s-%(release)s.%(arch)s.rpm" % rpminfo
+
+    def pkg(self,rpminfo):
         """Return the path (relative to build_dir) where an rpm belongs"""
         return "%(arch)s/%(name)s-%(version)s-%(release)s.%(arch)s.rpm" % rpminfo
 
@@ -2005,9 +2011,10 @@ def _module_info(url):
 def taskLabel(taskInfo):
     """Format taskInfo (dict) into a descriptive label."""
     method = taskInfo['method']
+    method_main = method.split("::")[1]
     arch = taskInfo['arch']
     extra = ''
-    if method in ('build', 'maven'):
+    if method_main in ('build', 'maven'):
         if taskInfo.has_key('request'):
             source, target = taskInfo['request'][:2]
             if '://' in source:
@@ -2015,20 +2022,20 @@ def taskLabel(taskInfo):
             else:
                 module_info = os.path.basename(source)
             extra = '%s, %s' % (target, module_info)
-    elif method in ('buildSRPMFromSCM', 'buildSRPMFromCVS'):
+    elif method_main in ('buildSRPMFromSCM', 'buildSRPMFromCVS'):
         if taskInfo.has_key('request'):
             url = taskInfo['request'][0]
             extra = _module_info(url)
-    elif method == 'buildArch':
+    elif method_main == 'buildArch':
         if taskInfo.has_key('request'):
             srpm, tagID, arch = taskInfo['request'][:3]
             srpm = os.path.basename(srpm)
             extra = '%s, %s' % (srpm, arch)
-    elif method == 'buildMaven':
+    elif method_main == 'buildMaven':
         if taskInfo.has_key('request'):
             build_tag = taskInfo['request'][1]
             extra = build_tag['name']
-    elif method == 'wrapperRPM':
+    elif method_main == 'wrapperRPM':
         if taskInfo.has_key('request'):
             build_tag = taskInfo['request'][1]
             build = taskInfo['request'][2]
@@ -2036,57 +2043,57 @@ def taskLabel(taskInfo):
                 extra = '%s, %s' % (build_tag['name'], buildLabel(build))
             else:
                 extra = build_tag['name']
-    elif method == 'winbuild':
+    elif method_main == 'winbuild':
         if taskInfo.has_key('request'):
             vm = taskInfo['request'][0]
             url = taskInfo['request'][1]
             target = taskInfo['request'][2]
             module_info = _module_info(url)
             extra = '%s, %s' % (target, module_info)
-    elif method == 'vmExec':
+    elif method_main == 'vmExec':
         if taskInfo.has_key('request'):
             extra = taskInfo['request'][0]
-    elif method == 'buildNotification':
+    elif method_main == 'buildNotification':
         if taskInfo.has_key('request'):
             build = taskInfo['request'][1]
             extra = buildLabel(build)
-    elif method == 'newRepo':
+    elif method_main == 'newRepo':
         if taskInfo.has_key('request'):
             extra = str(taskInfo['request'][0])
-    elif method in ('tagBuild', 'tagNotification'):
+    elif method_main in ('tagBuild', 'tagNotification'):
         # There is no displayable information included in the request
         # for these methods
         pass
-    elif method == 'prepRepo':
+    elif method_main == 'prepRepo':
         if taskInfo.has_key('request'):
             tagInfo = taskInfo['request'][0]
             extra = tagInfo['name']
-    elif method == 'createrepo':
+    elif method_main == 'createrepo':
         if taskInfo.has_key('request'):
             arch = taskInfo['request'][1]
             extra = arch
-    elif method == 'dependantTask':
+    elif method_main == 'dependantTask':
         if taskInfo.has_key('request'):
             extra = ', '.join([subtask[0] for subtask in taskInfo['request'][1]])
-    elif method == 'chainbuild':
+    elif method_main == 'chainbuild':
         if taskInfo.has_key('request'):
             extra = taskInfo['request'][1]
-    elif method == 'waitrepo':
+    elif method_main == 'waitrepo':
         if taskInfo.has_key('request'):
             extra = str(taskInfo['request'][0])
             if len(taskInfo['request']) >= 3:
                 nvrs = taskInfo['request'][2]
                 if isinstance(nvrs, list):
                     extra += ', ' + ', '.join(nvrs)
-    elif method in ('createLiveCD', 'createAppliance'):
+    elif method_main in ('createLiveCD', 'createAppliance'):
         if taskInfo.has_key('request'):
             arch, target, ksfile = taskInfo['request'][:3]
             extra = '%s, %s, %s' % (target, arch, os.path.basename(ksfile))
-    elif method == 'restart':
+    elif method_main == 'restart':
         if taskInfo.has_key('request'):
             host = taskInfo['request'][0]
             extra = host['name']
-    elif method == 'restartVerify':
+    elif method_main == 'restartVerify':
         if taskInfo.has_key('request'):
             task_id, host = taskInfo['request'][:2]
             extra = host['name']
@@ -2179,3 +2186,68 @@ def add_db_logger(logger, cnx):
 
 def remove_log_handler(logger, handler):
     logging.getLogger(logger).removeHandler(handler)
+
+def get_pkg_info(X):
+    fileext=os.path.splitext(X)[1]
+    ret = {}
+    if fileext == ".rpm":
+        fields = ('name','version','release','epoch','arch','sigmd5','sourcepackage','sourcerpm','buildtime')
+        ret = get_header_fields(X,fields)
+#        ret['pmanager'] = "rpm"
+        ret['sourceNVRA'] = ret['sourcerpm']
+        ret['type'] = "rpm"
+    else:
+        if fileext == ".dsc":
+            info = DscFile(X)
+            ret['sourcepackage'] = 1
+            ret['includefiles'] = info.includefiles
+            ret['debianformat'] = info.pkgformat
+            ret['type'] = "dsc"
+        if fileext == ".deb":
+            info = DebFile(X)
+            ret['sourceNVRA'] = info.spkgname + "-"
+            ret['sourceNVRA'] +=  info.spkgversion + "-"
+            ret['sourceNVRA'] +=  info.spkgrelease + "."
+            ret['sourceNVRA'] +=  info.arch
+            ret['sourcepackage'] = 0
+            ret['type'] = "deb"
+            ret['arch'] = info.arch
+        #ret['pmanager'] = "dpkg"
+        ret['size'] = os.path.getsize(X)
+        ret['buildtime'] = int(os.stat(X).st_ctime)
+        ret['name'] = info.name
+        ret['version'] = info.version
+	ret['release'] = info.release
+	ret['epoch'] = info.epoch
+
+    return ret 
+
+    
+class RpmInfo(PkgInfo):
+    def getInfo(self):
+        fields = ('name','version','release','epoch','arch','sigmd5','sourcepackage','sourcerpm','buildtime')
+        ret = get_header_fields(self.path, fields)
+        ret['sourceNVRA'] = ret['sourcerpm']
+        ret['type'] = "rpm"
+        if ret['sourcepackage']:
+            ret['arch'] = 'src'
+
+        fileinfo={}
+        fileinfo['md5sum']="0"
+        fileinfo['size']="%d"%os.path.getsize(self.path)
+        fileinfo['path']=self.path
+
+        ret['files'] =[fileinfo]
+        return ret
+
+
+def createPkgInfo(path):
+    fileext = os.path.splitext(path)[1]
+    pkginfo = None
+    if fileext == ".rpm":
+        pkginfo = RpmInfo(path)
+    elif fileext == ".dsc":
+        pkginfo = DscInfo(path)
+    elif fileext == ".deb":
+        pkginfo = DebInfo(path)
+    return pkginfo
