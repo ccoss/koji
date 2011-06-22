@@ -1,0 +1,611 @@
+#!/usr/bin/python
+
+# Koji Repository Administrator (kojira)
+# Copyright (c) 2005-2010 Red Hat
+#
+#    Koji is free software; you can redistribute it and/or
+#    modify it under the terms of the GNU Lesser General Public
+#    License as published by the Free Software Foundation; 
+#    version 2.1 of the License.
+#
+#    This software is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+#    Lesser General Public License for more details.
+#
+#    You should have received a copy of the GNU Lesser General Public
+#    License along with this software; if not, write to the Free Software
+#    Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+#
+# Authors:
+#       Mike McLean <mikem@redhat.com>
+
+try:
+    import krbV
+except ImportError:
+    pass
+import sys
+import os
+import koji
+from koji.tasks import safe_rmtree
+from optparse import OptionParser
+from ConfigParser import ConfigParser
+import fnmatch
+import logging
+import logging.handlers
+import pprint
+import signal
+import time
+import traceback
+
+
+class ManagedRepo(object):
+
+    def __init__(self, session, options, data):
+        self.session = session
+        self.options = options
+        self.logger = logging.getLogger("koji.repo")
+        self.current = True
+        self.repo_id = data['id']
+        self.event_id = data['create_event']
+        self.event_ts = data['create_ts']
+        self.tag_id = data['tag_id']
+        self.state = data['state']
+        self.first_seen = time.time()
+        order = self.session.getFullInheritance(self.tag_id, event=self.event_id)
+        #order may contain same tag more than once
+        tags = {self.tag_id : 1}
+        for x in order:
+            tags[x['parent_id']] = 1
+        self.taglist = tags.keys()
+
+    def expire(self):
+        """Mark the repo expired"""
+        if self.state == koji.REPO_EXPIRED:
+            return
+        elif self.state == koji.REPO_DELETED:
+            raise koji.GenericError, "Repo already deleted"
+        self.logger.info("Expiring repo %s.." % self.repo_id)
+        self.session.repoExpire(self.repo_id)
+        self.state = koji.REPO_EXPIRED
+
+    def expired(self):
+        return self.state == koji.REPO_EXPIRED
+
+    def pending(self, timeout=180):
+        """Determine if repo generation appears to be in progress and not already obsolete"""
+        if self.state != koji.REPO_INIT:
+            return False
+        age = time.time() - self.event_ts
+        return self.isCurrent(ignore_state=True) and age < timeout
+
+    def stale(self):
+        """Determine if repo seems stale
+
+        By stale, we mean:
+            - state=INIT
+            - timestamp really, really old
+        """
+        timeout = 36000
+        #XXX - config
+        if self.state != koji.REPO_INIT:
+            return False
+        age = time.time() - max(self.event_ts, self.first_seen)
+        #the first_seen timestamp is also factored in because a repo can be
+        #created from an older event and should not be expired based solely on
+        #that event's timestamp.
+        return age > timeout
+
+    def tryDelete(self):
+        """Remove the repo from disk, if possible"""
+        tag_info = self.session.getTag(self.tag_id)
+        if not tag_info:
+            self.logger.warn('Could not get info for tag %i, skipping delete of repo %i' % 
+                             (self.tag_id, self.repo_id))
+            return False
+        tag_name = tag_info['name']
+        path = pathinfo.repo(self.repo_id, tag_name)
+        try:
+            #also check dir age. We do this because a repo can be created from an older event
+            #and should not be removed based solely on that event's timestamp.
+            mtime = os.stat(path).st_mtime
+        except OSError, e:
+            if e.errno == 2:
+                # No such file or directory, so the repo either never existed,
+                # or has already been deleted, so allow it to be marked deleted.
+                self.logger.info("Repo directory does not exist: %s" % path)
+                pass
+            else:
+                self.logger.error("Can't stat repo directory: %s, %s" % (path, e.strerror))
+                return False
+        else:
+            age = time.time() - max(self.event_ts, mtime)
+            if age < self.options.deleted_repo_lifetime:
+                #XXX should really be called expired_repo_lifetime
+                return False
+        self.logger.debug("Attempting to delete repo %s.." % self.repo_id)
+        if self.state != koji.REPO_EXPIRED:
+            raise koji.GenericError, "Repo not expired"
+        if self.session.repoDelete(self.repo_id) > 0:
+            #cannot delete, we are referenced by a buildroot
+            self.logger.debug("Cannot delete repo %s, still referenced" % self.repo_id)
+            return False
+        self.logger.info("Deleted repo %s" % self.repo_id)
+        self.state = koji.REPO_DELETED
+        safe_rmtree(path, strict=False)
+        return True
+
+    def ready(self):
+        return self.state == koji.REPO_READY
+
+    def deleted(self):
+        return self.state == koji.REPO_DELETED
+
+    def problem(self):
+        return self.state == koji.REPO_PROBLEM
+
+    def isCurrent(self, ignore_state=False):
+        if not self.current:
+            # no point in checking again
+            return False
+        if not ignore_state and self.state != koji.REPO_READY:
+            #also no point in checking
+            return False
+        self.logger.debug("Checking for changes: %r" % self.taglist)
+        if self.session.tagChangedSinceEvent(self.event_id,self.taglist):
+            self.logger.debug("Tag data has changed since event %r" % self.event_id)
+            self.current = False
+        else:
+            self.logger.debug("No tag changes since event %r" % self.event_id)
+        return self.current
+
+
+class RepoManager(object):
+
+    def __init__(self, options, session):
+        self.options = options
+        self.session = session
+        self.repos = {}
+        self.tasks = {}
+        self.tag_use_stats = {}
+        self.logger = logging.getLogger("koji.repo.manager")
+
+    def printState(self):
+        for repo in self.repos.itervalues():
+            self.logger.debug("repo %s: tag=%s, state=%s" 
+                              % (repo.repo_id, repo.tag_id, koji.REPO_STATES[repo.state]))
+        for tag_id, task_id in self.tasks.iteritems():
+            self.logger.debug("task %s for tag %s" % (task_id, tag_id))
+
+    def readCurrentRepos(self):
+        self.logger.debug("Reading current repo data")
+        repodata = self.session.getActiveRepos()
+        self.logger.debug("Repo data: %r" % repodata)
+        for data in repodata:
+            repo_id = data['id']
+            repo = self.repos.get(repo_id)
+            if repo:
+                #we're already tracking it
+                if repo.state != data['state']:
+                    self.logger.info('State changed for repo %s: %s -> %s'
+                                       %(repo_id, koji.REPO_STATES[repo.state], koji.REPO_STATES[data['state']]))
+                    repo.state = data['state']
+            else:
+                self.logger.info('Found repo %s, state=%s'
+                                   %(repo_id, koji.REPO_STATES[data['state']]))
+                self.repos[repo_id] = ManagedRepo(self.session, self.options, data)
+
+    def pruneLocalRepos(self):
+        """Scan filesystem for repos and remove any deleted ones
+
+        Also, warn about any oddities"""
+        self.logger.debug("Scanning filesystem for repos")
+        topdir = "%s/repos" % pathinfo.topdir
+        count = 0
+        for tag in os.listdir(topdir):
+            tagdir = "%s/%s" % (topdir, tag)
+            if not os.path.isdir(tagdir):
+                continue
+            taginfo = self.session.getTag(tag)
+            if taginfo is None:
+                self.logger.warn("Unexpected directory (no such tag): %s" % tagdir)
+                continue
+            for repo_id in os.listdir(tagdir):
+                if count >= self.options.prune_batch_size:
+                    #this keeps us from spending too much time on this at one time
+                    return
+                repodir = "%s/%s" % (tagdir, repo_id)
+                if not os.path.isdir(repodir):
+                    continue
+                try:
+                    repo_id = int(repo_id)
+                except ValueError:
+                    continue
+                if self.repos.has_key(repo_id):
+                    #we're already managing it, no need to deal with it here
+                    continue
+                try:
+                    dir_ts = os.stat(repodir).st_mtime
+                except OSError:
+                    #just in case something deletes the repo out from under us
+                    continue
+                rinfo = self.session.repoInfo(repo_id)
+                if rinfo is None:
+                    if not self.options.ignore_stray_repos:
+                        age = time.time() - dir_ts
+                        if age > self.options.deleted_repo_lifetime:
+                            count += 1
+                            self.logger.info("Removing unexpected directory (no such repo): %s" % repodir)
+                            safe_rmtree(repodir, strict=False)
+                    continue
+                if rinfo['tag_name'] != taginfo['name']:
+                    self.logger.warn("Tag name mismatch: %s" % repodir)
+                    continue
+                if rinfo['state'] in (koji.REPO_DELETED, koji.REPO_PROBLEM):
+                    age = time.time() - max(rinfo['create_ts'], dir_ts)
+                    if age > self.options.deleted_repo_lifetime:
+                        #XXX should really be called expired_repo_lifetime
+                        count += 1
+                        logger.info("Removing stray repo (state=%s): %s" % (koji.REPO_STATES[rinfo['state']], repodir))
+                        safe_rmtree(repodir, strict=False)
+                        pass
+
+    def tagUseStats(self, tag_id):
+        stats = self.tag_use_stats.get(tag_id)
+        now = time.time()
+        if stats and now - stats['ts'] < 3600:
+            #use the cache
+            return stats
+        data = self.session.listBuildroots(tagID=tag_id,
+                                           queryOpts={'order': '-create_event_id', 'limit' : 100})
+        #XXX magic number (limit)
+        if data:
+            tag_name = data[0]['tag_name']
+        else:
+            tag_name = "#%i" % tag_id
+        stats = {'data': data, 'ts': now, 'tag_name': tag_name}
+        recent = [x for x in data if now - x['create_ts'] < 3600 * 24]
+        #XXX magic number
+        stats ['n_recent'] = len(recent)
+        self.tag_use_stats[tag_id] = stats
+        self.logger.debug("tag %s recent use count: %i" % (tag_name, len(recent)))
+        return stats
+
+    def adjustRegenOrder(self, data):
+        """Adjust repo regen order
+
+        data is list of (ts, tag_id) entries
+        We sort the tags by two factors
+            - age of current repo (passed in via data)
+            - last use in a buildroot (via tagUseStats)
+        Having and older repo or a higher use count give the repo
+        a higher priority for regen. The formula attempts to keep
+        the last use factor from overpowering, so that very old repos
+        still get regen priority.
+        """
+        if not data:
+            return []
+        self.logger.info("Got %i tags for regeneration", len(data))
+        if len(data) == 1:
+            return data[:]
+        data = [(ts, tag_id, self.tagUseStats(tag_id)) for ts, tag_id in data]
+        max_n = max([s['n_recent'] for ts,tag,s in data])
+        if max_n == 0:
+            self.logger.info("No tags had recent use")
+            ret = [(ts,tag) for ts,tag,s in data]
+            ret.sort()
+            return ret
+        #XXX - need to make sure our times aren't far off, otherwise this
+        # adjustment could have the opposite of the desired effect
+        now = time.time()
+        ret = []
+        names = {}
+        for ts, tag_id, stats in data:
+            names[tag_id] = stats['tag_name']
+            #normalize use count
+            adj = stats ['n_recent'] * 9.0 / max_n + 1   # 1.0 to 10.0
+            sortvalue = (now-ts)*adj
+            ret.append(((now-ts)*adj, tag_id))
+            self.logger.debug("order adjustment: tag %s, ts %s, recent use %s, factor %s, new sort value %s",
+                    stats['tag_name'], ts, stats ['n_recent'], adj, sortvalue)
+            #so a day old unused repo gets about the regen same priority as a
+            #2.4-hour-old, very popular repo
+        ret.sort()
+        ret.reverse()
+        if self.logger.isEnabledFor(logging.INFO):
+            #show some stats
+            by_ts = [(ts,names[tag]) for ts,tag,s in data]
+            by_ts.sort()
+            self.logger.info("Newest repo: %s (%.2fhrs)", by_ts[-1][1], (now - by_ts[-1][0])/3600.)
+            self.logger.info("Oldest repo: %s (%.2fhrs)", by_ts[0][1], (now - by_ts[0][0])/3600.)
+            self.logger.info("Best score: %s (%.1f)", names[ret[0][1]], ret[0][0])
+            self.logger.info("Worst score: %s (%.1f)", names[ret[-1][1]], ret[-1][0])
+            self.logger.info("Order: %s", [names[x[1]] for x in ret])
+        return ret
+
+    def updateRepos(self):
+        #check on tasks
+        for tag_id, task_id in self.tasks.items():
+            tinfo = self.session.getTaskInfo(task_id)
+            tstate = koji.TASK_STATES[tinfo['state']]
+            if tstate == 'CLOSED':
+                self.logger.info("Finished: newRepo task %s for tag %s" % (task_id, tag_id))
+                del self.tasks[tag_id]
+            elif tstate in ('CANCELED', 'FAILED'):
+                self.logger.info("Problem: newRepo task %s for tag %s is %s" % (task_id, tag_id, tstate))
+                del self.tasks[tag_id]
+            #TODO [?] - implement a timeout for active tasks?
+        self.logger.debug("Current tasks: %r" % self.tasks)
+        self.logger.debug("Updating repos")
+        self.readCurrentRepos()
+        #check for stale repos
+        for repo in self.repos.values():
+            if repo.stale():
+                repo.expire()
+        #find out which tags require repos
+        tags = {}
+        for target in self.session.getBuildTargets():
+            tag_id = target['build_tag']
+            tags[tag_id] = target['build_tag_name']
+        #index repos by tag
+        tag_repos = {}
+        for repo in self.repos.values():
+            tag_repos.setdefault(repo.tag_id, []).append(repo)
+        self.logger.debug("Needed tags: %r" % tags.keys())
+        self.logger.debug("Current tags: %r" % tag_repos.keys())
+
+        #we need to determine:
+        #  - which tags need a new repo
+        #  - if any repos seem to be broken
+        regen = []
+        for tag_id in tags.iterkeys():
+            covered = False
+            for repo in tag_repos.get(tag_id,[]):
+                if repo.isCurrent():
+                    covered = True
+                    break
+                elif repo.pending():
+                    #one on the way
+                    covered = True
+                    break
+            if covered:
+                continue
+            if self.tasks.has_key(tag_id):
+                #repo creation in progress
+                #TODO - implement a timeout
+                continue
+            #tag still appears to be uncovered
+            #figure out how old existing repo is
+            ts = 0
+            for repo in tag_repos.get(tag_id, []):
+                if repo.event_ts > ts:
+                    ts = repo.event_ts
+            regen.append((ts, tag_id))
+        #factor in tag use stats
+        regen = self.adjustRegenOrder(regen)
+        self.logger.debug("order: %s", regen)
+        # i.e. tags with oldest (or no) repos get precedence
+        for ts, tag_id in regen:
+            if len(self.tasks) >= self.options.max_repo_tasks:
+                self.logger.info("Maximum number of repo tasks reached.")
+                break
+            tagname = tags[tag_id]
+            taskopts = {}
+            for pat in self.options.debuginfo_tags.split():
+                if fnmatch.fnmatch(tagname, pat):
+                    taskopts['debuginfo'] = True
+                    break
+            for pat in self.options.source_tags.split():
+                if fnmatch.fnmatch(tagname, pat):
+                    taskopts['src'] = True
+                    break
+            task_id = self.session.newRepo(tagname, **taskopts)
+            self.logger.info("Created newRepo task %s for tag %s (%s)" % (task_id, tag_id, tags[tag_id]))
+            self.tasks[tag_id] = task_id
+        #some cleanup
+        n_deletes = 0
+        for tag_id, repolist in tag_repos.items():
+            if not tags.has_key(tag_id):
+                #repos for these tags are no longer required
+                for repo in repolist:
+                    if repo.ready():
+                        repo.expire()
+            for repo in repolist:
+                if n_deletes >= self.options.delete_batch_size:
+                    break
+                if repo.expired():
+                    #try to delete
+                    if repo.tryDelete():
+                        n_deletes += 1
+
+
+def main(options, session):
+    repomgr = RepoManager(options, session)
+    repomgr.readCurrentRepos()
+    repomgr.pruneLocalRepos()
+    def shutdown(*args):
+        raise SystemExit
+    signal.signal(signal.SIGTERM,shutdown)
+    logger.info("Entering main loop")
+    while True:
+        try:
+            repomgr.updateRepos()
+            repomgr.printState()
+            repomgr.pruneLocalRepos()
+        except KeyboardInterrupt:
+            logger.warn("User exit")
+            break
+        except koji.AuthExpired:
+            logger.warn("Session expired")
+            break
+        except SystemExit:
+            logger.warn("Shutting down")
+            break
+        except:
+            # log the exception and continue
+            logger.error(''.join(traceback.format_exception(*sys.exc_info())))
+        try:
+            time.sleep(5)
+        except KeyboardInterrupt:
+            logger.warn("User exit")
+            break
+    try:
+        session.logout()
+    finally:
+        sys.exit()
+
+def get_options():
+    """process options from command line and config file"""
+    # parse command line args
+    parser = OptionParser("usage: %prog [opts]")
+    parser.add_option("-c", "--config", dest="configFile",
+                      help="use alternate configuration file", metavar="FILE",
+                      default="/etc/kojira/kojira.conf")
+    parser.add_option("--user", help="specify user")
+    parser.add_option("--password", help="specify password")
+    parser.add_option("--principal", help="Kerberos principal")
+    parser.add_option("--keytab", help="Kerberos keytab")
+    parser.add_option("-f", "--fg", dest="daemon",
+                      action="store_false", default=True,
+                      help="run in foreground")
+    parser.add_option("-d", "--debug", action="store_true",
+                      help="show debug output")
+    parser.add_option("-q", "--quiet", action="store_true",
+                      help="don't show warnings")
+    parser.add_option("-v", "--verbose", action="store_true",
+                      help="show verbose output")
+    parser.add_option("--with-src", action="store_true",
+                      help="include srpms in repos")
+    parser.add_option("--force-lock", action="store_true", default=False,
+                      help="force lock for exclusive session")
+    parser.add_option("--debug-xmlrpc", action="store_true", default=False,
+                      help="show xmlrpc debug output")
+    parser.add_option("--skip-main", action="store_true", default=False,
+                      help="don't actually run main")
+    parser.add_option("--show-config", action="store_true", default=False,
+                      help="Show config and exit")
+    parser.add_option("-s", "--server", help="URL of XMLRPC server")
+    parser.add_option("--topdir", help="Specify topdir")
+    parser.add_option("--logfile", help="Specify logfile")
+    (options, args) = parser.parse_args()
+
+    config = ConfigParser()
+    config.read(options.configFile)
+    section = 'kojira'
+    for x in config.sections():
+        if x != section:
+            quit('invalid section found in config file: %s' % x)
+    defaults = {'with_src': False,
+                'debuginfo_tags': '',
+                'source_tags': '',
+                'verbose': False,
+                'debug': False,
+                'ignore_stray_repos': False,
+                'topdir': '/mnt/koji',
+                'server': None,
+                'logfile': '/var/log/kojira.log',
+                'principal': None,
+                'keytab': None,
+                'ccache': '/var/tmp/kojira.ccache',
+                'retry_interval': 60,
+                'max_retries': 120,
+                'offline_retry': True,
+                'offline_retry_interval': 120,
+                'prune_batch_size': 4,
+                'delete_batch_size': 3,
+                'max_repo_tasks' : 10,
+                'deleted_repo_lifetime': 7*24*3600,
+                #XXX should really be called expired_repo_lifetime
+                'cert': '/etc/kojira/client.crt',
+                'ca': '/etc/kojira/clientca.crt',
+                'serverca': '/etc/kojira/serverca.crt'
+                }
+    if config.has_section(section):
+        int_opts = ('prune_batch_size', 'deleted_repo_lifetime', 'max_repo_tasks',
+                    'delete_batch_size', 'retry_interval', 'max_retries', 'offline_retry_interval')
+        str_opts = ('topdir', 'server', 'user', 'password', 'logfile', 'principal', 'keytab',
+                    'cert', 'ca', 'serverca', 'debuginfo_tags', 'source_tags')
+        bool_opts = ('with_src','verbose','debug','ignore_stray_repos', 'offline_retry')
+        for name in config.options(section):
+            if name in int_opts:
+                defaults[name] = config.getint(section, name)
+            elif name in str_opts:
+                defaults[name] = config.get(section, name)
+            elif name in bool_opts:
+                defaults[name] = config.getboolean(section, name)
+            else:
+                quit("unknown config option: %s" % name)
+    for name, value in defaults.items():
+        if getattr(options, name, None) is None:
+            setattr(options, name, value)
+    if options.logfile in ('','None','none'):
+        options.logfile = None
+    return options
+
+def quit(msg=None, code=1):
+    if msg:
+        logging.getLogger("koji.repo").error(msg)
+        sys.stderr.write('%s\n' % msg)
+        sys.stderr.flush()
+    sys.exit(code)
+
+if  __name__ == "__main__":
+
+    options = get_options()
+    topdir = getattr(options,'topdir',None)
+    pathinfo = koji.PathInfo(topdir)
+    if options.show_config:
+        pprint.pprint(options.__dict__)
+        sys.exit()
+    if options.logfile:
+        if not os.path.exists(options.logfile):
+            try:
+                logfile = open(options.logfile, "w")
+                logfile.close()
+            except:
+                sys.stderr.write("Cannot create logfile: %s\n" % options.logfile)
+                sys.exit(1)
+        if not os.access(options.logfile,os.W_OK):
+            sys.stderr.write("Cannot write to logfile: %s\n" % options.logfile)
+            sys.exit(1)
+    koji.add_file_logger("koji", options.logfile)
+    #note we're setting logging for koji.*
+    logger = logging.getLogger("koji")
+    if options.debug:
+        logger.setLevel(logging.DEBUG)
+    elif options.verbose:
+        logger.setLevel(logging.INFO)
+    elif options.quiet:
+        logger.setLevel(logging.ERROR)
+    else:
+        logger.setLevel(logging.WARNING)
+    session_opts = {}
+    for k in ('user', 'password', 'debug_xmlrpc', 'debug',
+              'retry_interval', 'max_retries', 'offline_retry', 'offline_retry_interval'):
+        session_opts[k] = getattr(options,k)
+    session = koji.ClientSession(options.server,session_opts)
+    if os.path.isfile(options.cert):
+        # authenticate using SSL client certificates
+        session.ssl_login(options.cert, options.ca, options.serverca)
+    elif options.user:
+        # authenticate using user/password
+        session.login()
+    elif sys.modules.has_key('krbV') and options.principal and options.keytab:
+        session.krb_login(options.principal, options.keytab, options.ccache)
+    #get an exclusive session
+    try:
+        session.exclusiveSession(force=options.force_lock)
+    except koji.AuthLockError:
+        quit("Error: Unable to get lock. Trying using --force-lock")
+    if not session.logged_in:
+        quit("Error: Unknown login error")
+    if not session.logged_in:
+        print "Error: unable to log in"
+        sys.exit(1)
+    if options.skip_main:
+        sys.exit()
+    elif options.daemon:
+        koji.daemonize()
+    else:
+        koji.add_stderr_logger("koji")
+    main(options, session)

@@ -1,0 +1,195 @@
+#import koji
+#import koji.util
+#from kojiweb import util
+
+#include "includes/header.chtml"
+#set $nvrpath = '%(name)s/%(version)s/%(release)s' % $build
+#set $archiveurl = ''
+#if $mavenbuild
+#set $archiveurl = '%s/%s/%s/%s/%s' % ($mavenBase, $mavenbuild['group_id'].replace('.', '/'),
+                                       $mavenbuild['artifact_id'], $mavenbuild['version'],
+                                       $build['release'])
+#end if
+
+  <h4>Information for build <a href="buildinfo?buildID=$build.id">$koji.buildLabel($build)</a></h4>
+
+  <table>
+    <tr>
+      <th>ID</th><td>$build.id</td>
+    </tr>
+    <tr>
+      <th>Package Name</th><td><a href="packageinfo?packageID=$build.package_id">$build.package_name</a></td>
+    </tr>
+    <tr>
+      <th>Version</th><td>$build.version</td>
+    </tr>
+    <tr>
+      <th>Release</th><td>$build.release</td>
+    </tr>
+    <tr>
+      <th>Epoch</th><td>$build.epoch</td>
+    </tr>
+    #if $mavenbuild
+    <tr>
+      <th>Maven&nbsp;groupId</th><td>$mavenbuild.group_id</td>
+    </tr>
+    <tr>
+      <th>Maven&nbsp;artifactId</th><td>$mavenbuild.artifact_id</td>
+    </tr>
+    <tr>
+      <th>Maven&nbsp;version</th><td>$mavenbuild.version</td>
+    </tr>
+    #end if
+    #if $summary
+    <tr>
+      <th>Summary</th><td class="rpmheader">$util.escapeHTML($summary)</td>
+    </tr>
+    #end if
+    #if $description
+    <tr>
+      <th>Description</th><td class="rpmheader">$util.escapeHTML($description)</td>
+    </tr>
+    #end if
+    <tr>
+      <th>Built by</th><td><a href="userinfo?userID=$build.owner_id">$build.owner_name</a></td>
+    </tr>
+    <tr>
+      #set $stateName = $util.stateName($build.state)
+      <th>State</th>
+      <td class="$stateName">$stateName
+      #if $build.state == $koji.BUILD_STATES.BUILDING
+      #if $currentUser and ('admin' in $perms or $build.owner_id == $currentUser.id)
+      <span class="adminLink">(<a href="cancelbuild?buildID=$build.id$util.authToken($self)">cancel</a>)</span>
+      #end if
+      #end if
+      </td>
+    </tr>
+    <tr>
+      <th>Started</th><td>$util.formatTimeLong($build.creation_time)</td>
+    </tr>
+    #if $build.state == $koji.BUILD_STATES.BUILDING
+    #if $estCompletion
+    <tr>
+      <th>Est. Completion</th><td>$util.formatTimeLong($estCompletion)</td>
+    </tr>
+    #end if
+    #else
+    <tr>
+      <th>Completed</th><td>$util.formatTimeLong($build.completion_time)</td>
+    </tr>
+    #end if
+    #if $task
+    <tr>
+      <th>Task</th><td><a href="taskinfo?taskID=$task.id" class="task$util.taskState($task.state)">$koji.taskLabel($task)</a></td>
+    </tr>
+    #end if
+    <tr>
+      <th>Tags</th>
+      <td class="container">
+        #if $len($tags) > 0
+        <table class="nested">
+          #for $tag in $tags
+          <tr>
+            <td><a href="taginfo?tagID=$tag.id">$tag.name</a></td>
+          </tr>
+          #end for
+        </table>
+        #else
+        No tags
+        #end if
+      </td>
+    </tr>
+    <tr>
+      <th>RPMs</th>
+      <td class="container">
+        #if $len($rpmsByArch) > 0
+        <table class="nested">
+          #if $rpmsByArch.has_key('src')
+          <tr><th>src</th><th></th></tr>
+          #for $rpm in $rpmsByArch['src']
+          #set $rpmfile = '%(name)s-%(version)s-%(release)s.%(arch)s.rpm' % $rpm
+          <tr>
+            <td></td>
+            <td>$rpmfile (<a href="rpminfo?rpmID=$rpm.id">info</a>) (<a href="$downloadBase/$nvrpath/$rpm.arch/$rpmfile">download</a>)</td>
+          </tr>
+          #end for
+          #end if
+          #set $arches = $rpmsByArch.keys()
+          #silent $arches.sort()
+          #for $arch in $arches
+          #if $arch == 'src'
+          #silent continue
+          #end if
+          <tr>
+            <th>$arch</th>
+            <td>
+              #if $task
+              #if $arch == 'noarch'
+              (<a href="$downloadBase/$nvrpath/data/logs/$noarch_log_dest/">build logs</a>)
+              #else
+              (<a href="$downloadBase/$nvrpath/data/logs/$arch/">build logs</a>)
+              #end if
+              #end if
+            </td>
+          </tr>
+          #for $rpm in $rpmsByArch[$arch] + $debuginfoByArch.get($arch, [])
+          <tr>
+            #set $rpmfile = '%(name)s-%(version)s-%(release)s.%(arch)s.rpm' % $rpm
+            <td></td>
+            <td>
+              $rpmfile (<a href="rpminfo?rpmID=$rpm.id">info</a>) (<a href="$downloadBase/$nvrpath/$rpm.arch/$rpmfile">download</a>)
+            </td>
+          </tr>
+          #end for
+          #end for
+        </table>
+        #else
+        No RPMs
+        #end if
+      </td>
+    </tr>
+    #if $archives
+    <tr>
+      <th>Archives</th>
+      <td class="container">
+	<table class="nested">
+	  #set $exts = $archivesByExt.keys()
+	  #for ext in $exts
+	  <tr>
+	    <th>$ext</th>
+	    <td>
+              #if $ext == $exts[0]
+	        #if $mavenbuild
+                (<a href="$downloadBase/$nvrpath/data/logs/maven2/">build logs</a>)
+                #elif $winbuild
+                (<a href="$downloadBase/$nvrpath/data/logs/win/">build logs</a>)
+	        #end if
+              #end if
+	    </td>
+	  </tr>
+	  #for $archive in $archivesByExt[$ext]
+	  <tr>
+	    <td/>
+	    <td>
+            #if $mavenbuild
+            $archive.filename (<a href="archiveinfo?archiveID=$archive.id">info</a>) (<a href="$archiveurl/$archive.filename">download</a>)
+            #elif $winbuild
+            $koji.pathinfo.winfile($archive) (<a href="archiveinfo?archiveID=$archive.id">info</a>) (<a href="$downloadBase/$nvrpath/win/$koji.pathinfo.winfile($archive)">download</a>)
+            #end if
+	    </td>
+	  </tr>
+	  #end for
+	  #end for
+	</table>
+      </td>
+    </tr>
+    #end if
+    #if $changelog
+    <tr>
+      <th>Changelog</th>
+      <td class="changelog">$util.escapeHTML($koji.util.formatChangelog($changelog))</td>
+    </tr>
+    #end if
+  </table>
+
+#include "includes/footer.chtml"

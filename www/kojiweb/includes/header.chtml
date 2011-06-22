@@ -1,0 +1,97 @@
+#encoding utf-8
+#import koji
+#import random
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+#def greeting()
+#set $greetings = ('hello', 'hi', 'yo', "what's up", "g'day", 'back to work',
+                   'bonjour',
+                   'hallo',
+                   'ciao',
+                   'hola',
+                  u'olá',
+                  u'dobrý den',
+                  u'zdravstvuite',
+                  u'góðan daginn',
+                   'hej',
+                   'tervehdys',
+                  u'grüezi',
+                  u'céad míle fáilte',
+                  u'hylô',
+                  u'bună ziua',
+                  u'jó napot',
+                   'dobre dan',
+                  u'你好',
+                  u'こんにちは',
+                  u'नमस्कार',
+                  u'안녕하세요')
+#echo $random.choice($greetings)##slurp
+#end def
+
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head>
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8"/>
+    <title>$title | $siteName</title>
+    <link rel="shortcut icon" href="/koji-static/images/koji.ico"/>
+    <link rel="stylesheet" type="text/css" media="screen" title="Koji Style" href="/koji-static/koji.css"/>
+    <link rel="alternate stylesheet" type="text/css" media="screen" title="Debug" href="/koji-static/debug.css"/>
+    <link rel="alternate" type="application/rss+xml" title="Koji: recent builds" href="/koji/recentbuilds"/>
+  </head>
+  <body id="$pageID">
+
+    <div id="wrap">
+      <div id="innerwrap">
+
+        <!-- HEADER -->
+        <div id="header">
+          <img src="/koji-static/images/koji.png" alt="Koji Logo" id="kojiLogo"/>
+          <form action="search" id="headerSearch">
+            <input type="hidden" name="match" value="glob"/>
+            <select name="type">
+              <option value="package">Packages</option>
+              <option value="build">Builds</option>
+              <option value="tag">Tags</option>
+              <option value="target">Build Targets</option>
+              <option value="user">Users</option>
+              <option value="host">Hosts</option>
+              <option value="rpm">RPMs</option>
+              #if $mavenEnabled
+              <option value="maven">Maven Artifacts</option>
+              #end if
+              #if $winEnabled
+              <option value="win">Windows Artifacts</option>
+              #end if
+            </select>
+            <input type="text" name="terms"/>
+            <input type="submit" value="Search"/>
+          </form>
+        </div><!-- end header -->
+
+        <!-- MAIN NAVIGATION -->
+        <div id="mainNav">
+          <h4 class="hide">Main Site Links:</h4>
+          <ul>
+            <li id="summaryTab"><a href="index">Summary</a></li>
+            <li id="packagesTab"><a href="packages">Packages</a></li>
+            <li id="buildsTab"><a href="builds">Builds</a></li>
+            <li id="tasksTab"><a href="tasks">Tasks</a></li>
+            <li id="tagsTab"><a href="tags">Tags</a></li>
+            <li id="buildtargetsTab"><a href="buildtargets">Build Targets</a></li>
+            <li id="usersTab"><a href="users">Users</a></li>
+            <li id="hostsTab"><a href="hosts">Hosts</a></li>
+            <li id="reportsTab"><a href="reports">Reports</a></li>
+            <li id="searchTab"><a href="search">Search</a></li>
+          </ul>
+        </div><!-- end mainNav -->
+
+        <span id="loginInfo">
+          $koji.formatTimeLong($currentDate) |
+          #if $currentUser
+          $greeting(), <a href="userinfo?userID=$currentUser.id">$currentUser.name</a> | <a href="logout">logout</a>
+          #else
+          <a href="login">login</a>
+          #end if
+        </span>
+
+        <div id="content">
