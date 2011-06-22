@@ -2,8 +2,29 @@ import os
 import re
 
 from debian import debfile
+from debian import deb822
 
 debian_version_chars = 'a-zA-Z\d.~+-'
+version_re = re.compile(r'\bVersion:\s*((?P<epoch>\d+)\:)?(?P<version>[%s]+)\s*\n' % debian_version_chars)
+
+def parseVersion( version ):
+    ret = {}
+    m = version_re.search( version )
+    if m :
+        if '-' in m.group('version'):
+            ret['release'] = m.group('version').split("-")[-1]
+            ret['version'] = "-".join(m.group('version').split("-")[0:-1])
+            ret['native'] = False
+        else:
+            ret['native'] = True # Debian native package
+            ret['version'] = m.group('version')
+            ret['release'] = "debiannative"
+        if m.group('epoch'):
+            ret['epoch'] = m.group('epoch')
+        else:
+            ret['epoch'] = None
+    return ret  
+   
 
 class PkgInfo(object):
     """Base class for Package Info"""
@@ -28,7 +49,7 @@ class PkgInfo(object):
 class DscInfo(PkgInfo):
     compressions = r"(gz|bz2)"
     pkg_re = re.compile(r'\bSource:\s*(?P<pkg>.+)\s*\n')
-    version_re = re.compile(r'\bVersion:\s*((?P<epoch>\d+)\:)?(?P<version>[%s]+)\s*\n' % debian_version_chars)
+    buildarchs_re = re.compile(r'\b:Architecture\s*(?P<buildarchs>.+)\s*\n')
     format_re = re.compile(r'\bFormat:\s*(?P<format>[0-9.]+)\s*\n')
     files_re = re.compile(r'\bFiles:\s*\n(?P<files>((\s+[^\n]+\n)+))')
 
@@ -39,6 +60,8 @@ class DscInfo(PkgInfo):
         ret['type'] = "dsc"
         ret['size'] = os.path.getsize(self.path)
         ret['buildtime'] = int(os.stat(self.path).st_ctime)
+        ret['exclusivearch'] = None
+        ret['excludearch'] = None
 
         f = file(self.path)
         content = f.read()
@@ -60,6 +83,9 @@ class DscInfo(PkgInfo):
         m = self.pkg_re.search(content)
         if m:
             ret['name'] = m.group('pkg')
+        m = self.buildarchs_re.search(content)
+        if m:
+            ret['buildarchs'] = m.group('buildarchs')
         m = self.format_re.search(content)
         if m:
             ret['pkgformat'] = m.group('format')
@@ -78,7 +104,6 @@ class DscInfo(PkgInfo):
         return ret
 
 class DebInfo(PkgInfo):
-    version_re = re.compile(r'((?P<epoch>\d+)\:)?(?P<version>[%s]+)\s*$' % debian_version_chars)
 
     def getInfo(self):
         ret={}
@@ -232,3 +257,6 @@ class DebFile(object):
         else:
             if self.arch == "all":
                 self.spkgname = self.name
+
+def getDpkgStatus( fo ):
+    return deb822.Packages.iter_paragraphs( fo )

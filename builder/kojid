@@ -121,7 +121,6 @@ def main(options, session):
     session.logout()
     sys.exit(0)
 
-
 class BuildRoot(object):
 
     def __init__(self,session,options,*args,**kwargs):
@@ -187,6 +186,216 @@ class BuildRoot(object):
         self.setup_dns = setup_dns
         self.maven_opts = maven_opts
         self.bind_opts = bind_opts
+        self.writeBuildConfig()
+
+    def writeBuildConfig(self):
+        pass
+
+    def getUploadPath(self):
+        """Get the path that should be used when uploading files to
+        the hub."""
+        return koji.pathinfo.taskrelpath(self.task_id)
+
+
+    def init(self):
+        pass
+
+
+    def build_spkg(self, specfile, sourcedir, source_cmd):
+        pass
+
+    def build(self,srpm,arch=None):
+        # run build
+        pass
+
+    def getPackageList(self):
+        pass
+
+    def resultdir(self):
+        return "%s/%s/result" % (self.options.mockdir, self.name)
+
+    def rootdir(self):
+        return "%s/%s/root" % (self.options.mockdir, self.name)
+
+    def expire(self):
+        self.session.host.setBuildRootState(self.id,'EXPIRED')
+
+class DpkgBuildRoot(BuildRoot):
+
+    def _build(self, cmd, args):
+
+        cmd.extend(args)
+        self.logger.info(' '.join(cmd))
+
+        pid = os.fork()
+        if pid:
+            resultdir = self.resultdir()
+            uploadpath = self.getUploadPath()
+            logs = {}
+
+            finished = False
+            while not finished:
+                time.sleep(1)
+                status = os.waitpid(pid, os.WNOHANG)
+                if status[0] != 0:
+                    finished = True
+
+                try:
+                    results = os.listdir(resultdir)
+                except OSError:
+                    # will happen when mock hasn't created the resultdir yet
+                    continue
+
+                for fname in results:
+                    if fname.endswith('.log') and not logs.has_key(fname):
+                        fpath = os.path.join(resultdir, fname)
+                        logs[fname] = (None, None, 0, fpath)
+                if workdir and mocklog not in logs:
+                    fpath = os.path.join(workdir, mocklog)
+                    if os.path.exists(fpath):
+                        logs[mocklog] = (None, None, 0, fpath)
+
+                for (fname, (fd, inode, size, fpath)) in logs.items():
+                    try:
+                        stat_info = os.stat(fpath)
+                        if not fd or stat_info.st_ino != inode or stat_info.st_size < size:
+                            # either a file we haven't opened before, or mock replaced a file we had open with
+                            # a new file and is writing to it, or truncated the file we're reading,
+                            # but our fd is pointing to the previous location in the old file
+                            if fd:
+                                self.logger.info('Rereading %s, inode: %s -> %s, size: %s -> %s' %
+                                                 (fpath, inode, stat_info.st_ino, size, stat_info.st_size))
+                                fd.close()
+                            fd = file(fpath, 'r')
+                        logs[fname] = (fd, stat_info.st_ino, stat_info.st_size, fpath)
+                    except:
+                        self.logger.error("Error reading mock log: %s", fpath)
+                        self.logger.error(''.join(traceback.format_exception(*sys.exc_info())))
+                        continue
+
+                    incremental_upload(self.session, fname, fd, uploadpath, logger=self.logger)
+            #clean up and return exit status of command
+            for (fname, (fd, inode, size, fpath)) in logs.items():
+                if fd:
+                    fd.close()
+            return status[1]
+
+        else:
+            #in no case should exceptions propagate past here
+            try:
+                self.session._forget()
+                if workdir:
+                    outfile = os.path.join(workdir, mocklog)
+                    flags = os.O_CREAT | os.O_WRONLY | os.O_APPEND
+                    fd = os.open(outfile, flags, 0666)
+                    os.dup2(fd, 1)
+                    os.dup2(fd, 2)
+                if os.getuid() == 0 and hasattr(self.options,"mockuser"):
+                    self.logger.info('Running mock as %s' % self.options.mockuser)
+                    uid,gid = pwd.getpwnam(self.options.mockuser)[2:4]
+                    os.setgroups([grp.getgrnam('mock')[2]])
+                    os.setregid(gid,gid)
+                    os.setreuid(uid,uid)
+                os.execvp(cmd[0],cmd)
+            except:
+                #diediedie
+                print "Failed to exec mock"
+                print ''.join(traceback.format_exception(*sys.exc_info()))
+                os._exit(1)
+
+
+#    def writeBuildConfig(self):
+        
+
+#    def init(self):
+        
+
+    def build_spkg(self, specfile, sourcedir, source_cmd):
+        self.session.host.setBuildRootState(self.id,'BUILDING')
+        args = ["-S","-uc","-us","-sa","--git-export-dir=%s"%self.resultdir()]
+        
+        cmd = ["cd %s && /usr/bin/git-buildpackage"%sourcedir]
+        rv = self._build(cmd, args)
+        
+        if rv:
+            self.expire()
+            raise koji.BuildError, "error building spkg"
+
+
+    def build(self,spkg,arch=None):
+        self.session.host.setBuildRootState(self.id,'BUILDING')
+        # init buildroot
+        #pbuilder modifications:1.no apt-cache backup 2.components could be null 3 do not copy source to result dir 
+        args = ["--no-targz","--buildplace", self.rootdir(), "--mirror", packagedir, "--distribution", repodir]
+
+        extargs = [ "--create", "--logfile", "%s/root.log"%self.resultdir()]
+        extargs.extend(args)
+        cmd = ["/usr/sbin/pbuilder"]
+        rv = self._build(cmd,extargs)
+        if rv:
+            self.expire()
+            raise koji.BuildError, "error building root"
+        
+        debbuildopts=None
+        if arch=="noarch" :
+            debbuildopts="-A"
+        else:
+            debbuildopts="-B"
+
+        extargs = ["--build", "--buildresult", self.resultdir(), "--debbuildopts", debbuildopts, "--logfile", "%s/build.log"%self.resultdir()]
+        extargs.extend(args)
+        extargs.appned(spkg)
+        rv = self._build(cmd,extargs)
+        if rv:
+            self.expire()
+            raise koji.BuildError, "error building pkg"
+
+    def getPackageList(self):
+        """Return a list of packages from the buildroot
+
+        Each member of the list is a dictionary containing the following fields:
+            - name
+            - version
+            - release
+            - epoch
+            - arch
+            - payloadhash
+            - size
+            - buildtime
+        """
+        version_re = re.compile(r'((?P<epoch>\d+)\:)?(?P<version>[%s]+)\s*$' % debian_version_chars)
+        fields = ('name',
+                  'version',
+                  'release',
+                  'epoch',
+                  'arch',
+                  'sigmd5',
+                  'size',
+                  'buildtime')
+        fo = file("%s/var/lib/dpkg/status" % self.rootdir())
+        dpkgstatus = koji.dpkg.getDpkgStatus( fo )
+        ret = []
+        try:
+            for pkg in dpkgstatus:
+                #skip our fake packages
+                if pkg['Status'] != 'install ok installed':
+                    #XXX config
+                    continue
+                pkg['name'] = pkg['Package']
+                pkg['arch'] = pkg['Architecture']
+                pkg['size'] = pkg['Installed-Size']
+                pkg['payloadhash'] = "%d"%pkg['size']
+                pkg['buildtime'] = 0 
+                pkg.update(koji.dpkg.parseVersion(pkg['Version']))
+                ret.append(pkg)
+        finally:
+            
+        #self.markExternalRPMs(ret)
+        return ret
+
+
+class RpmBuildRoot(BuildRoot):
+    def writeBuildConfig(self):
         self._writeMockConfig()
 
     def _writeMockConfig(self):
@@ -343,10 +552,6 @@ class BuildRoot(object):
                 print ''.join(traceback.format_exception(*sys.exc_info()))
                 os._exit(1)
 
-    def getUploadPath(self):
-        """Get the path that should be used when uploading files to
-        the hub."""
-        return koji.pathinfo.taskrelpath(self.task_id)
 
     def uploadDir(self, dirpath, suffix=None):
         """Upload the contents of the given directory to the
@@ -382,7 +587,7 @@ class BuildRoot(object):
         msg = '; see %s for more information' % logfile
         return parseStatus(rv, 'mock') + msg
 
-    def build_srpm(self, specfile, sourcedir, source_cmd):
+    def build_spkg(self, specfile, sourcedir, source_cmd):
         self.session.host.setBuildRootState(self.id,'BUILDING')
         if source_cmd:
             # call the command defined by source_cmd in the chroot so any required files not stored in
@@ -589,19 +794,10 @@ class BuildRoot(object):
             rpm_info['external_repo'] = erepo
             rpm_info['location'] = erepo['external_repo_id']
 
-    def resultdir(self):
-        return "%s/%s/result" % (self.options.mockdir, self.name)
 
-    def rootdir(self):
-        return "%s/%s/root" % (self.options.mockdir, self.name)
+class ChainBuildTask(BaseTaskHandler):
 
-    def expire(self):
-        self.session.host.setBuildRootState(self.id,'EXPIRED')
-
-
-class RpmChainBuildTask(BaseTaskHandler):
-
-    Methods = ['rpm::chainbuild']
+    Methods = ['::chainbuild']
     #mostly just waiting on other tasks
     _taskWeight = 0.1
 
@@ -626,7 +822,7 @@ class RpmChainBuildTask(BaseTaskHandler):
         for n_level, build_level in enumerate(srcs):
             #if there are any nvrs to wait on, do so
             if nvrs:
-                task_id = self.session.host.subtask(method='waitrepo',
+                task_id = self.session.host.subtask(method='::waitrepo',
                                                     arglist=[target_info['build_tag_name'], None, nvrs],
                                                     label="wait %i" % n_level,
                                                     parent=self.id)
@@ -636,7 +832,7 @@ class RpmChainBuildTask(BaseTaskHandler):
             build_tasks = []
             for n_src, src in enumerate(build_level):
                 if SCM.is_scm_url(src):
-                    task_id = self.session.host.subtask(method='build',
+                    task_id = self.session.host.subtask(method='::build',
                                                         arglist=[src, target, opts],
                                                         label="build %i,%i" % (n_level, n_src),
                                                         parent=self.id)
@@ -653,10 +849,9 @@ class RpmChainBuildTask(BaseTaskHandler):
                 if builds:
                     nvrs.append(builds[0]['nvr'])
 
+class BuildTask(BaseTaskHandler):
 
-class RpmBuildTask(BaseTaskHandler):
-
-    Methods = ['rpm::build']
+    Methods = ['::build']
     #we mostly just wait on other tasks
     _taskWeight = 0.2
 
@@ -681,11 +876,12 @@ class RpmBuildTask(BaseTaskHandler):
             self.event_id = None
         task_info = self.session.getTaskInfo(self.id)
         target_info = None
+        build_tag = {}
         if target:
             target_info = self.session.getBuildTarget(target, event=self.event_id)
         if target_info:
             dest_tag = target_info['dest_tag']
-            build_tag = target_info['build_tag']
+            build_tag['id'] = target_info['build_tag']
             if repo_info is not None:
                 #make sure specified repo matches target
                 if repo_info['tag_id'] != target_info['build_tag']:
@@ -696,11 +892,11 @@ class RpmBuildTask(BaseTaskHandler):
             # the destination tag (since the repo specifies the build tag).
             if repo_info is None:
                 raise koji.GenericError, 'unknown build target: %s' % target
-            build_tag = repo_info['tag_id']
+            build_tag['id'] = repo_info['tag_id']
             if target is None:
                 #ok, call it skip-tag for the buildroot tag
                 self.opts['skip_tag'] = True
-                dest_tag = build_tag
+                dest_tag = build_tag['id']
             else:
                 taginfo = self.session.getTag(target, event=self.event_id)
                 if not taginfo:
@@ -725,11 +921,13 @@ class RpmBuildTask(BaseTaskHandler):
             # use of this option is governed by policy
             self.session.host.assertPolicy('build_from_repo_id', policy_data)
         if not repo_info:
-            repo_info = self.getRepo(build_tag)  #(subtask)
+            repo_info = self.getRepo(build_tag['id'])  #(subtask)
             self.event_id = self.session.getLastEvent()['id']
-        srpm = self.getSRPM(src, build_tag, repo_info['id'])
-        h = self.readSRPMHeader(srpm)
-        data = koji.get_header_fields(h,['name','version','release','epoch'])
+        taginfo = self.session.getTag(build_tag['id'], event=self.event_id)
+        build_tag['pm_name'] = taginfo['pm_name']
+        spkgs = self.getSPKG(src, build_tag, repo_info['id'])
+        data = self.getSPKGInfo(spkgs)
+#        data = koji.get_header_fields(h,['name','version','release','epoch'])
         data['task_id'] = self.id
         extra_arches = None
         self.logger.info("Reading package config for %(name)s" % data)
@@ -746,19 +944,19 @@ class RpmBuildTask(BaseTaskHandler):
                 raise koji.BuildError, "package %s is blocked for tag %s" \
                         % (data['name'], target_info['dest_tag_name'])
             # TODO - more pre tests
-        archlist = self.getArchList(build_tag, h, extra=extra_arches)
+        archlist = self.getArchList(build_tag, data, extra=extra_arches)
         #let the system know about the build we're attempting
         if not self.opts.get('scratch'):
             #scratch builds do not get imported
             build_id = self.session.host.initBuild(data)
         #(initBuild raises an exception if there is a conflict)
         try:
-            srpm,rpms,brmap,logs = self.runBuilds(srpm,build_tag,archlist,repo_info['id'])
+            spkgs,pkgs,brmap,logs = self.runBuilds(spkgs,build_tag,archlist,repo_info['id'])
             if opts.get('scratch'):
                 #scratch builds do not get imported
-                self.session.host.moveBuildToScratch(self.id,srpm,rpms,logs=logs)
+                self.session.host.moveBuildToScratch(self.id,spkgs,pkgs,logs=logs)
             else:
-                self.session.host.completeBuild(self.id,build_id,srpm,rpms,brmap,logs=logs)
+                self.session.host.completeBuild(self.id,build_id,spkgs,pkgs,brmap,logs=logs)
         except (SystemExit,ServerExit,KeyboardInterrupt):
             #we do not trap these
             raise
@@ -771,11 +969,11 @@ class RpmBuildTask(BaseTaskHandler):
         if not self.opts.get('skip_tag') and not self.opts.get('scratch'):
             self.tagBuild(build_id,dest_tag)
 
-    def getSRPM(self, src, build_tag, repo_id):
+    def getSPKG(self, src, build_tag, repo_id):
         """Get srpm from src"""
         if isinstance(src,str):
             if SCM.is_scm_url(src):
-                return self.getSRPMFromSCM(src, build_tag, repo_id)
+                return self.getSPKGFromSCM(src, build_tag, repo_id)
             else:
                 #assume this is a path under uploads
                 return src
@@ -783,32 +981,36 @@ class RpmBuildTask(BaseTaskHandler):
             raise koji.BuildError, 'Invalid source specification: %s' % src
             #XXX - other methods?
 
-    def getSRPMFromSCM(self, url, build_tag, repo_id):
+    def getSPKGFromSCM(self, url, build_tag, repo_id):
         #TODO - allow different ways to get the srpm
-        task_id = self.session.host.subtask(method='buildSRPMFromSCM',
-                                            arglist=[url, build_tag, {'repo_id': repo_id}],
-                                            label='srpm',
+        task_id = self.session.host.subtask(method="%s::buildSPKGFromSCM"%build_tag['pm_name'],
+                                            arglist=[url, build_tag['id'], {'repo_id': repo_id}],
+                                            label='spkg',
                                             parent=self.id)
         # wait for subtask to finish
         result = self.wait(task_id)[task_id]
-        srpm = result['srpm']
-        return srpm
+        spkgs = result['spkgs']
+        return spkgs
 
-    def readSRPMHeader(self, srpm):
+    def getSPKGInfo(self, spkgs):
         #srpm arg should be a path relative to <BASEDIR>/work
-        self.logger.debug("Reading SRPM")
-        relpath = "work/%s" % srpm
+        self.logger.debug("Reading SPKG")
+        for f in spkgs:
+            if f.endswith('.src.rpm') or f.endswith('.dsc') :
+                spkg = f
+                break
+        relpath = "work/%s" % spkg
         opts = dict([(k, getattr(self.options, k)) for k in 'topurl','topdir'])
-        fo = koji.openRemoteFile(relpath, **opts)
-        h = koji.get_rpm_header(fo)
-        fo.close()
-        if h[rpm.RPMTAG_SOURCEPACKAGE] != 1:
-            raise koji.BuildError, "%s is not a source package" % srpm
-        return h
+        fn = koji.getRemoteFilePath(relpath, **opts)
+        data = koji.createPkgInfo(fn).getInfo()
+        #fo.close()
+        if data['sourcepackage'] != 1:
+            raise koji.BuildError, "%s is not a source package" % spkg
+        return data
 
-    def getArchList(self, build_tag, h, extra=None):
+    def getArchList(self, build_tag, data, extra=None):
         # get list of arches to build for
-        buildconfig = self.session.getBuildConfig(build_tag, event=self.event_id)
+        buildconfig = self.session.getBuildConfig(build_tag['id'], event=self.event_id)
         arches = buildconfig['arches']
         if not arches:
             #XXX - need to handle this better
@@ -821,9 +1023,9 @@ class RpmBuildTask(BaseTaskHandler):
         archlist = arches.split()
         self.logger.debug('base archlist: %r' % archlist)
         # - adjust arch list based on srpm macros
-        buildarchs = h[rpm.RPMTAG_BUILDARCHS]
-        exclusivearch = h[rpm.RPMTAG_EXCLUSIVEARCH]
-        excludearch = h[rpm.RPMTAG_EXCLUDEARCH]
+        buildarchs = data['buildarchs']
+        exclusivearch = data['exclusivearch']
+        excludearch = data['excludearch']
         if buildarchs:
             archlist = buildarchs
             self.logger.debug('archlist after buildarchs: %r' % archlist)
@@ -852,17 +1054,18 @@ class RpmBuildTask(BaseTaskHandler):
             raise koji.BuildError, "No matching arches were found"
         return archdict.keys()
 
-    def runBuilds(self, srpm, build_tag, archlist, repo_id):
+
+    def runBuilds(self, spkg, build_tag, archlist, repo_id):
         self.logger.debug("Spawning jobs for arches: %r" % (archlist))
         subtasks = {}
-        keep_srpm = True
+        keep_spkg = True
         for arch in archlist:
-            subtasks[arch] = self.session.host.subtask(method='buildArch',
-                                                       arglist=[srpm, build_tag, arch, keep_srpm, {'repo_id': repo_id}],
+            subtasks[arch] = self.session.host.subtask(method="%s::buildArch"%build_tag['pm_name'],
+                                                       arglist=[spkg, build_tag['id'], arch, keep_spkg, {'repo_id': repo_id}],
                                                        label=arch,
                                                        parent=self.id,
                                                        arch=koji.canonArch(arch))
-            keep_srpm = False
+            keep_spkg = False
 
         self.logger.debug("Got subtasks: %r" % (subtasks))
         self.logger.debug("Waiting on subtasks...")
@@ -872,46 +1075,46 @@ class RpmBuildTask(BaseTaskHandler):
 
         # finalize import
         # merge data into needed args for completeBuild call
-        rpms = []
+        pkgs = []
         brmap = {}
         logs = {}
-        built_srpm = None
+        built_spkg = None
         for (arch, task_id) in subtasks.iteritems():
             result = results[task_id]
             self.logger.debug("DEBUG: %r : %r " % (arch,result,))
             brootid = result['brootid']
-            for fn in result['rpms']:
-                rpms.append(fn)
+            for fn in result['pkgs']:
+                pkgs.append(fn)
                 brmap[fn] = brootid
             for fn in result['logs']:
                 logs.setdefault(arch,[]).append(fn)
-            if result['srpms']:
-                if built_srpm:
+            if result['spkgs']:
+                if built_spkg:
                     raise koji.BuildError, "multiple builds returned a srpm.  task %i" % self.id
                 else:
-                    built_srpm = result['srpms'][0]
-                    brmap[result['srpms'][0]] = brootid
-        if built_srpm:
-            srpm = built_srpm
+                    built_spkg = result['spkgs'][0]
+                    brmap[result['spkgs'][0]] = brootid
+        if built_spkg:
+            spkg = built_spkg
         else:
-            raise koji.BuildError("could not find a built srpm")
+            raise koji.BuildError("could not find a built spkg")
 
-        return srpm,rpms,brmap,logs
+        return spkg,pkgs,brmap,logs
 
     def tagBuild(self,build_id,dest_tag):
         #XXX - need options to skip tagging and to force tagging
         #create the tagBuild subtask
         #this will handle the "post tests"
-        task_id = self.session.host.subtask(method='tagBuild',
+        task_id = self.session.host.subtask(method='::tagBuild',
                                        arglist=[dest_tag,build_id,False,None,True],
                                        label='tag',
                                        parent=self.id,
                                        arch='noarch')
         self.wait(task_id)
 
-class RpmBuildArchTask(BaseTaskHandler):
+class BuildArchTask(BaseTaskHandler):
 
-    Methods = ['rpm::buildArch']
+#    Methods = ['::buildArch']
 
     def weight(self):
         return 1.5
@@ -934,15 +1137,26 @@ class RpmBuildArchTask(BaseTaskHandler):
         weight = self.weight() + min(4.5, adj)
         self.session.host.setTaskWeight(self.id, weight)
 
-    def srpm_sanity_checks(self, filename):
-        header = koji.get_rpm_header(filename)
+    def spkg_sanity_checks(self, filename):
+        pass
 
-        if not header[rpm.RPMTAG_PACKAGER]:
-            raise koji.BuildError, "The build system failed to set the packager tag"
-        if not header[rpm.RPMTAG_VENDOR]:
-            raise koji.BuildError, "The build system failed to set the vendor tag"
-        if not header[rpm.RPMTAG_DISTRIBUTION]:
-            raise koji.BuildError, "The build system failed to set the distribution tag"
+    def spkg_files_check(self, fn):
+        if not os.path.exists(fn):
+            raise koji.BuildError, "SPKG file missing: %s" % fn
+        # peel E:N-V-R from package
+#        h = koji.get_rpm_header(fn)
+#        name = h[rpm.RPMTAG_NAME]
+#        ver = h[rpm.RPMTAG_VERSION]
+#        rel = h[rpm.RPMTAG_RELEASE]
+#        epoch = h[rpm.RPMTAG_EPOCH]
+#        if h[rpm.RPMTAG_SOURCEPACKAGE] != 1:
+#            raise koji.BuildError, "not a source package"
+
+    def getResultFiles(self, resultdir):
+        pass
+
+    def createBuildRoot(session, options, *args,**kwargs):
+        pass
 
     def handler(self, pkg, root, arch, keep_srpm, opts=None):
         """Build a package in a buildroot for one arch"""
@@ -956,18 +1170,10 @@ class RpmBuildArchTask(BaseTaskHandler):
         event_id = repo_info['create_event']
 
         # starting srpm should already have been uploaded by parent
-        self.logger.debug("Reading SRPM")
+        self.logger.debug("Reading SPKG")
+        # get spkg files
         fn = self.localPath("work/%s" % pkg)
-        if not os.path.exists(fn):
-            raise koji.BuildError, "SRPM file missing: %s" % fn
-        # peel E:N-V-R from package
-        h = koji.get_rpm_header(fn)
-        name = h[rpm.RPMTAG_NAME]
-        ver = h[rpm.RPMTAG_VERSION]
-        rel = h[rpm.RPMTAG_RELEASE]
-        epoch = h[rpm.RPMTAG_EPOCH]
-        if h[rpm.RPMTAG_SOURCEPACKAGE] != 1:
-            raise koji.BuildError, "not a source package"
+        self.spkg_files_check(fn)
         # Disable checking for distribution in the initial SRPM because it
         # might have been built outside of the build system
         # if not h[rpm.RPMTAG_DISTRIBUTION]:
@@ -979,7 +1185,7 @@ class RpmBuildArchTask(BaseTaskHandler):
             'repo_id': repo_id
             }
         br_arch = self.find_arch(arch, self.session.host.getHost(), self.session.getBuildConfig(root, event=event_id))
-        broot = BuildRoot(self.session, self.options, root, br_arch, self.id, **rootopts)
+        broot = createBuildRoot(self.session, self.options, root, br_arch, self.id, **rootopts)
         broot.workdir = self.workdir
 
         self.logger.debug("Initializing buildroot")
@@ -991,50 +1197,41 @@ class RpmBuildArchTask(BaseTaskHandler):
 
         # extract results
         resultdir = broot.resultdir()
-        rpm_files = []
-        srpm_files = []
-        log_files = []
-        unexpected = []
-        for f in os.listdir(resultdir):
-            # files here should have one of two extensions: .log and .rpm
-            if f[-4:] == ".log":
-                log_files.append(f)
-            elif f[-8:] == ".src.rpm":
-                srpm_files.append(f)
-            elif f[-4:] == ".rpm":
-                rpm_files.append(f)
-            else:
-                unexpected.append(f)
-        self.logger.debug("rpms: %r" % rpm_files)
-        self.logger.debug("srpms: %r" % srpm_files)
-        self.logger.debug("logs: %r" % log_files)
-        self.logger.debug("unexpected: %r" % unexpected)
+        self.pkg_files = []
+        self.spkg_files = []
+        self.log_files = []
+        self.unexpected = []
+        self.getResultFiles(resultdir)
+        self.logger.debug("pkgs: %r" % self.pkg_files)
+        self.logger.debug("spkgs: %r" % self.spkg_files)
+        self.logger.debug("logs: %r" % self.log_files)
+        self.logger.debug("unexpected: %r" % self.unexpected)
 
         # upload files to storage server
         uploadpath = broot.getUploadPath()
-        for f in rpm_files:
+        for f in self.pkg_files:
             self.uploadFile("%s/%s" % (resultdir,f))
-        self.logger.debug("keep srpm %i %s %s" % (self.id, keep_srpm, opts))
+        self.logger.debug("keep spkg %i %s %s" % (self.id, keep_srpm, opts))
         if keep_srpm:
-            if len(srpm_files) == 0:
-                raise koji.BuildError, "no srpm files found for task %i" % self.id
-            if len(srpm_files) > 1:
-                raise koji.BuildError, "mulitple srpm files found for task %i: %s" % (self.id, srpm_files)
+            if len(self.spkg_files) == 0:
+                raise koji.BuildError, "no spkg files found for task %i" % self.id
+            #if len(self.spkg_files) > 1:
+            #    raise koji.BuildError, "mulitple spkg files found for task %i: %s" % (self.id, self.spkg_files)
 
             # Run sanity checks.  Any failures will throw a BuildError
-            self.srpm_sanity_checks("%s/%s" % (resultdir,srpm_files[0]))
+            self.spkg_sanity_checks("%s/%s" % (resultdir,self.spkg_files[0]))
 
-            self.logger.debug("uploading %s/%s to %s" % (resultdir,srpm_files[0], uploadpath))
-            self.uploadFile("%s/%s" % (resultdir,srpm_files[0]))
-        if rpm_files:
-            ret['rpms'] = [ "%s/%s" % (uploadpath,f) for f in rpm_files ]
+            self.logger.debug("uploading %s/%s to %s" % (resultdir,self.spkg_files[0], uploadpath))
+            self.uploadFile("%s/%s" % (resultdir,self.spkg_files[0]))
+        if self.pkg_files:
+            ret['pkgs'] = [ "%s/%s" % (uploadpath,f) for f in self.pkg_files ]
         else:
-            ret['rpms'] = []
+            ret['pkgs'] = []
         if keep_srpm:
-            ret['srpms'] = [ "%s/%s" % (uploadpath,f) for f in srpm_files ]
+            ret['spkgs'] = [ "%s/%s" % (uploadpath,f) for f in self.spkg_files ]
         else:
-            ret['srpms'] = []
-        ret['logs'] = [ "%s/%s" % (uploadpath,f) for f in log_files ]
+            ret['spkgs'] = []
+        ret['logs'] = [ "%s/%s" % (uploadpath,f) for f in self.log_files ]
 
         ret['brootid'] = broot.id
 
@@ -1042,6 +1239,66 @@ class RpmBuildArchTask(BaseTaskHandler):
         #Let TaskManager clean up
 
         return ret
+
+
+
+class RpmBuildArchTask(BuildArchTask):
+
+    Methods = ['rpm::buildArch']
+
+
+    def spkg_sanity_checks(self, filename):
+        header = koji.get_rpm_header(filename)
+
+        if not header[rpm.RPMTAG_PACKAGER]:
+            raise koji.BuildError, "The build system failed to set the packager tag"
+        if not header[rpm.RPMTAG_VENDOR]:
+            raise koji.BuildError, "The build system failed to set the vendor tag"
+        if not header[rpm.RPMTAG_DISTRIBUTION]:
+            raise koji.BuildError, "The build system failed to set the distribution tag"
+
+    def getResultFiles(self, resultdir):
+        for f in os.listdir(resultdir):
+            # files here should have one of two extensions: .log and .rpm
+            if f[-4:] == ".log":
+                self.log_files.append(f)
+            elif f[-8:] == ".src.rpm":
+                self.spkg_files.append(f)
+            elif f[-4:] == ".rpm":
+                self.pkg_files.append(f)
+            else:
+                self.unexpected.append(f)
+       
+    def createBuildRoot(session, options, *args, **kwargs):
+        return RpmBuildRoot(session, options, *args, **kwargs)
+
+class DpkgBuildArchTask(BuildArchTask):
+
+    Methods = ['dpkg::buildArch']
+
+
+    def spkg_sanity_checks(self, filename):
+        pass
+
+    def getResultFiles(self, resultdir):
+        for f in os.listdir(resultdir):
+            # files here should have one of two extensions: .log and .rpm
+            if f[-4:] == ".log":
+                self.log_files.append(f)
+            elif f[-4:] == ".dsc":
+                fl = koji.createPkgInfo(f).getInfo()['files']
+                for l in fl :
+                    self.spkg_files.append(l['path'])
+            elif f[-4:] == ".deb":
+                self.pkg_files.append(f)
+            else:
+                self.unexpected.append(f)
+            for s in self.spkg_files:
+                self.unexpected.remove(s)
+       
+    def createBuildRoot(session, options, *args, **kwargs):
+        return DpkgBuildRoot(session, options, *args, **kwargs)
+
 
 class RpmMavenTask(MultiPlatformTask):
 
@@ -2087,19 +2344,22 @@ class RpmLiveCDTask(RpmImageTask):
                    os.path.join(koji.pathinfo.imageFinalPath(),
                                 koji.pathinfo.livecdRelPath(image_id), isofile)
 
-class RpmBuildSRPMFromSCMTask(BaseTaskHandler):
+class BuildSPKGFromSCMTask(BaseTaskHandler):
 
-    Methods = ['rpm::buildSRPMFromSCM']
+#    Methods = ['::buildSPKGFromSCM']
     _taskWeight = 1.0
 
-    def spec_sanity_checks(self, filename):
-        spec = open(filename).read()
-        for tag in ("Packager", "Distribution", "Vendor"):
-            if re.match("%s:" % tag, spec, re.M):
-                raise koji.BuildError, "%s is not allowed to be set in spec file" % tag
-        for tag in ("packager", "distribution", "vendor"):
-            if re.match("%%define\s+%s\s+" % tag, spec, re.M):
-                raise koji.BuildError, "%s is not allowed to be defined in spec file" % tag
+    def createBuildRoot(session, options, *args, **kwargs):
+        raise koji.BuildError, "This method is not implemented by subclass!" 
+
+    def preBuild(self, sourcedir, scmdir):
+        raise koji.BuildError, "This method is not implemented by subclass!" 
+
+    def getSPKG(self,resultdir):
+        raise koji.BuildError, "This method is not implemented by subclass!" 
+
+    def checkSPKG(self,spkgs):
+        raise koji.BuildError, "This method is not implemented by subclass!" 
 
     def handler(self, url, build_tag, opts=None):
         # will throw a BuildError if the url is invalid
@@ -2122,7 +2382,7 @@ class RpmBuildSRPMFromSCMTask(BaseTaskHandler):
                     'setup_dns': True,
                     'repo_id': repo_id}
         br_arch = self.find_arch('noarch', self.session.host.getHost(), self.session.getBuildConfig(build_tag['id'], event=event_id))
-        broot = BuildRoot(self.session, self.options, build_tag['id'], br_arch, self.id, **rootopts)
+        broot = createBuildRoot(self.session, self.options, build_tag['id'], br_arch, self.id, **rootopts)
         broot.workdir = self.workdir
 
         self.logger.debug("Initializing buildroot")
@@ -2140,6 +2400,36 @@ class RpmBuildSRPMFromSCMTask(BaseTaskHandler):
         sourcedir = scm.checkout(scmdir, self.session, uploadpath, logfile)
         # chown the sourcedir and everything under it to the mockuser
         # so we can build the srpm as non-root
+        spec_file = self.preBuild(sourcedir,scmdir)
+
+        #build srpm
+        self.logger.debug("Running srpm build")
+        broot.build_spkg(spec_file, sourcedir, scm.source_cmd)
+
+        spkgs = getSPKG(broot.resultdir())
+        checkSPKG(spkgs)
+
+
+        #upload srpm and return
+        for f in spkgs:
+            self.uploadFile(f)
+
+        broot.expire()
+
+#        return {'spkg': "%s/%s" % (uploadpath, srpm_name)}
+        return {'spkgs': spkgs}
+
+
+class RpmBuildSPKGFromSCMTask(BuildSPKGFromSCMTask):
+
+    Methods = ['rpm::buildSPKGFromSCM']
+    _taskWeight = 1.0
+
+
+    def createBuildRoot(session, options, *args, **kwargs):
+        return RpmBuildRoot(session, options, *args, **kwargs)
+
+    def preBuild(self, sourcedir, scmdir):
         uid = pwd.getpwnam(self.options.mockuser)[2]
         # rpmbuild seems to complain if it's running in the "mock" group but
         # files are in a different group
@@ -2159,12 +2449,16 @@ class RpmBuildSRPMFromSCMTask(BaseTaskHandler):
 
         # Run spec file sanity checks.  Any failures will throw a BuildError
         self.spec_sanity_checks(spec_file)
+        return spec_file
 
-        #build srpm
-        self.logger.debug("Running srpm build")
-        broot.build_srpm(spec_file, sourcedir, scm.source_cmd)
+    def getSPKG(self,resultdir):
+        """get source package list from result dir"""
+        srpms = glob.glob('%s/*.src.rpm' % resultdir)
+        return srpms
 
-        srpms = glob.glob('%s/*.src.rpm' % broot.resultdir())
+    def checkSPKG(self,spkgs):
+        """check source package """
+        srpms=spkgs
         if len(srpms) == 0:
             raise koji.BuildError, "No srpms found in %s" % sourcedir
         elif len(srpms) > 1:
@@ -2181,15 +2475,49 @@ class RpmBuildSRPMFromSCMTask(BaseTaskHandler):
         if srpm_name != os.path.basename(srpm):
             raise koji.BuildError, 'srpm name mismatch: %s != %s' % (srpm_name, os.path.basename(srpm))
 
-        #upload srpm and return
-        self.uploadFile(srpm)
 
-        broot.expire()
+    def spec_sanity_checks(self, filename):
+        spec = open(filename).read()
+        for tag in ("Packager", "Distribution", "Vendor"):
+            if re.match("%s:" % tag, spec, re.M):
+                raise koji.BuildError, "%s is not allowed to be set in spec file" % tag
+        for tag in ("packager", "distribution", "vendor"):
+            if re.match("%%define\s+%s\s+" % tag, spec, re.M):
+                raise koji.BuildError, "%s is not allowed to be defined in spec file" % tag
 
-        return {'srpm': "%s/%s" % (uploadpath, srpm_name)}
+class DpkgBuildSPKGFromSCMTask(BuildSPKGFromSCMTask):
 
-class RpmTagNotificationTask(BaseTaskHandler):
-    Methods = ['rpm::tagNotification']
+    Methods = ['dpkg::buildSPKGFromSCM']
+    _taskWeight = 1.0
+
+
+    def createBuildRoot(session, options, *args, **kwargs):
+        return DpkgBuildRoot(session, options, *args, **kwargs)
+
+    def preBuild(self, sourcedir, scmdir):
+        spec_file = None
+        return spec_file
+
+    def getSPKG(self,resultdir):
+        """get source package list from result dir"""
+        dsc = glob.glob('%s/*.dsc' % resultdir)
+        files = DscInfo(dsc).getInfo()['files']
+        spkgs = []
+        for f in files:
+            spkgs.append(f['path'])
+        return spkgs
+
+    def checkSPKG(self,spkgs):
+        """check source package """
+        pass
+
+
+    def spec_sanity_checks(self, filename):
+        pass
+
+
+class TagNotificationTask(BaseTaskHandler):
+    Methods = ['::tagNotification']
 
     _taskWeight = 0.1
 
@@ -2475,8 +2803,8 @@ Build Info: %(weburl)s/buildinfo?buildID=%(build_id)i\r
         return l
 
 
-class RpmNewRepoTask(BaseTaskHandler):
-    Methods = ['rpm::newRepo']
+class NewRepoTask(BaseTaskHandler):
+    Methods = ['::newRepo']
     _taskWeight = 0.1
 
     def handler(self, tag, event=None, src=False, debuginfo=False):
@@ -2509,7 +2837,7 @@ class RpmNewRepoTask(BaseTaskHandler):
             arglist = [repo_id, arch, oldrepo]
             if external_repos:
                 arglist.append(external_repos)
-            subtasks[arch] = self.session.host.subtask(method='createrepo',
+            subtasks[arch] = self.session.host.subtask(method="%s::createrepo"%tinfo['pm_name'],
                                                        arglist=arglist,
                                                        label=arch,
                                                        parent=self.id,
@@ -2631,6 +2959,88 @@ class RpmCreaterepoTask(BaseTaskHandler):
         if not isSuccess(status):
             raise koji.GenericError, 'failed to merge repos: %s' \
                 % parseStatus(status, ' '.join(cmd))
+
+class DpkgCreaterepoTask(BaseTaskHandler):
+
+    Methods = ['dpkg::createrepo']
+    _taskWeight = 1.5
+
+    def handler(self, repo_id, arch, oldrepo, external_repos=None):
+        #arch is the arch of the repo, not the task
+        rinfo = self.session.repoInfo(repo_id, strict=True)
+        if rinfo['state'] != koji.REPO_INIT:
+            raise koji.GenericError, "Repo %(id)s not in INIT state (got %(state)s)" % rinfo
+        self.repo_id = rinfo['id']
+        self.pathinfo = koji.PathInfo(self.options.topdir)
+        toprepodir = self.pathinfo.repo(repo_id, rinfo['tag_name'])
+        self.repodir = '%s/%s' % (toprepodir, arch)
+        if not os.path.isdir(self.repodir):
+            raise koji.GenericError, "Repo directory missing: %s" % self.repodir
+        groupdata = os.path.join(toprepodir, 'groups', 'comps.xml')
+        #set up our output dir
+        self.outdir = '%s/repo' % self.workdir
+        self.datadir = '%s/repodata' % self.outdir
+        pkglist = os.path.join(self.repodir, 'pkglist')
+        if os.path.getsize(pkglist) == 0:
+            pkglist = None
+        self.create_local_repo(rinfo, arch, pkglist, groupdata, oldrepo)
+
+        external_repos = self.session.getExternalRepoList(rinfo['tag_id'], event=rinfo['create_event'])
+        if external_repos:
+            self.merge_repos(external_repos, arch, groupdata)
+        elif pkglist is None:
+            fo = file(os.path.join(self.datadir, "EMPTY_REPO"), 'w')
+            fo.write("This repo is empty because its tag has no content for this arch\n")
+            fo.close()
+
+        uploadpath = self.getUploadDir()
+        files = []
+        
+        for f in os.listdir(self.datadir):
+            files.append(f)
+            self.session.uploadWrapper('%s/%s' % (self.datadir, f), uploadpath, f)
+
+        return [uploadpath, files]
+
+    def create_local_repo(self, rinfo, arch, pkglist, groupdata, oldrepo):
+        koji.ensuredir(self.outdir)
+        koji.ensuredir(self.datadir)
+        cmd = ["cd %s && /usr/bin/dpkg-scanpackages"%self.pathinfo.topdir, '-a', arch, 'packages/dpkg', '| gzip -9c >', "%s/Packages.gz"%self.datadir ]
+        #for test
+        #testcmd = ['touch',"%s/Package.gz"%self.datadir]
+        #self.logger.warn("----------%s" % " ".join(cmd))        
+      
+        logfile = '%s/createrepo.log' % self.workdir
+#        status = log_output(self.session, testcmd[0], testcmd, logfile, self.getUploadDir(), logerror=True)
+        status = log_output(self.session, cmd[0], cmd, logfile, self.getUploadDir(), logerror=True)
+        if not isSuccess(status):
+            raise koji.GenericError, 'failed to create repo: %s' \
+                    % parseStatus(status, ' '.join(cmd))
+
+        slist="""
+deb file://%s repo/%s/%s/%s/repodata \n
+"""%(self.pathinfo.topdir,rinfo['tag_name'],rinfo['id'],arch) 
+        #self.logger.warn("==========%s" % slist)        
+        
+        sourceslist = file("%s/sources.list" % self.datadir, 'a')
+        sourceslist.write(slist)
+        sourceslist.close()
+
+
+    def merge_repos(self, external_repos, arch, groupdata):
+        repos = []
+       
+        for repo in external_repos:
+            ext_url = repo['url']
+            # substitute $arch in the url with the arch of the repo we're generating
+            #ext_url = ext_url.replace('$arch', arch)
+            repos.append(ext_url)
+
+        #append ext url to aptconfdir/sources.list
+        sourceslist = file("%s/sources.list" % self.aptconfdir, 'w')
+        sourceslist.write('\n'.join(repos))
+        sourceslist.close()
+
 
 class WaitrepoTask(BaseTaskHandler):
 

@@ -1380,6 +1380,25 @@ def openRemoteFile(relpath, topurl=None, topdir=None):
         raise GenericError, "No access method for remote file: %s" % relpath
     return fo
 
+def getRemoteFilePath(relpath, topurl=None, topdir=None):
+    """Open a file on the main server (read-only)
+
+    This is done either via a mounted filesystem (nfs) or http, depending
+    on options"""
+    fn = None
+    if topurl:
+        url = "%s/%s" % (topurl, relpath)
+        src = urllib2.urlopen(url)
+        fo = tempfile.NamedTemporaryFile()
+        shutil.copyfileobj(src, fo)
+        src.close()
+        fn = fo.name
+    elif topdir:
+        fn = "%s/%s" % (topdir, relpath)
+    else:
+        raise GenericError, "No access method for remote file: %s" % relpath
+    return fn
+
 
 class PathInfo(object):
     # ASCII numbers and upper- and lower-case letter for use in tmpdir()
@@ -1400,7 +1419,7 @@ class PathInfo(object):
 
     def build(self,build):
         """Return the directory where a build belongs"""
-        return self.topdir + ("/packages/%(pmanager)s/%(name)s/%(version)s/%(release)s" % build)
+        return self.topdir + ("/packages/%(pm_name)s/%(name)s/%(version)s/%(release)s" % build)
 
     def mavenbuild(self, build, maveninfo):
         """Return the directory where the Maven build exists in the global store (/mnt/koji/maven2)"""
@@ -2225,7 +2244,7 @@ def get_pkg_info(X):
     
 class RpmInfo(PkgInfo):
     def getInfo(self):
-        fields = ('name','version','release','epoch','arch','sigmd5','sourcepackage','sourcerpm','buildtime')
+        fields = ('name','version','release','epoch','arch','sigmd5','sourcepackage','sourcerpm','buildtime','buildarchs','exclusivearch','excludearch')
         ret = get_header_fields(self.path, fields)
         ret['sourceNVRA'] = ret['sourcerpm']
         ret['type'] = "rpm"

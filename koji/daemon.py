@@ -734,8 +734,9 @@ class TaskManager(object):
         for task in tasks:
             # note: tasks are in priority order
             self.logger.debug("task: %r" % task)
-            # if task['method'].split("::")[0] != self.options.pm_name:
-            #     continue
+            if task['method'].split("::")[0] != "" and task['method'].split("::")[0] != self.hostdata['pm_name']:
+                self.logger.warn("Skipping task %(id)i, pm_name not match", task)
+                continue
             if task['method'] not in self.handlers:
                 self.logger.warn("Skipping task %(id)i, no handler for method %(method)s", task)
                 continue
@@ -1004,6 +1005,10 @@ class TaskManager(object):
                 raise koji.tasks.ServerRestart
         self.hostdata = self.session.host.getHost()
         self.logger.debug('hostdata: %r' % self.hostdata)
+        if self.hostdata['pm_name'] != self.options.pm_name:
+            self.status = "Package manager name config Error"
+            self.logger.info(self.status)
+            return False
         if not self.hostdata['enabled']:
             self.status = "Host is disabled"
             self.logger.info(self.status)
@@ -1038,10 +1043,10 @@ class TaskManager(object):
         Returns True if successful, False otherwise
         """
         self.logger.info("Attempting to take task %s" % task['id'])
-        if task['method'] in ('buildArch', 'buildSRPMFromSCM', 'buildMaven') and \
+        if task['method'].split("::")[1] in ('buildArch', 'buildSRPMFromSCM', 'buildMaven') and \
                task['arch'] == 'noarch':
             task_info = self.session.getTaskInfo(task['id'], request=True)
-            if task['method'] == 'buildMaven':
+            if task['method'].split("::")[1] == 'buildMaven':
                 tag = task_info['request'][1]
             else:
                 tag_id = task_info['request'][1]

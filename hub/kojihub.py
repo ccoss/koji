@@ -1077,6 +1077,7 @@ def readTaggedBuilds(tag,event=None,inherit=False,latest=False,package=None,owne
               ('events.id', 'creation_event_id'), ('events.time', 'creation_time'),
               ('package.id', 'package_id'), ('package.name', 'package_name'),
               ('package.name', 'name'),
+              ('package.pm_name', 'pm_name'),
               ("package.name || '-' || build.version || '-' || build.release", 'nvr'),
               ('users.id', 'owner_id'), ('users.name', 'owner_name')]
     st_complete = koji.BUILD_STATES['COMPLETE']
@@ -1225,6 +1226,96 @@ def readTaggedRPMS(tag, package=None, arch=None, event=None,inherit=False,latest
                 continue
             rpms.append(rpminfo)
     return [rpms,builds]
+
+def readTaggedPKGS(tag, package=None, arch=None, event=None,inherit=False,latest=True,pkgsigs=False,owner=None,type=None):
+    """Returns a list of pkgs for specified tag
+
+    set inherit=True to follow inheritance
+    set event to query at a time in the past
+    set latest=False to get all tagged RPMS (not just from the latest builds)
+
+    If type is not None, restrict the list to rpms from builds of the given type.  Currently the
+    supported types are 'maven' and 'win'.
+    """
+    taglist = [tag]
+    if inherit:
+        #XXX really should cache this - it gets called several places
+        #   (however, it is fairly quick)
+        taglist += [link['parent_id'] for link in readFullInheritance(tag, event)]
+
+    builds = readTaggedBuilds(tag, event=event, inherit=inherit, latest=latest, package=package, owner=owner, type=type)
+    #index builds
+    build_idx = dict([(b['build_id'],b) for b in builds])
+
+    #the following query is run for each tag in the inheritance
+    fields = [('pkginfo.name', 'name'),
+              ('pkginfo.version', 'version'),
+              ('pkginfo.release', 'release'),
+              ('pkginfo.arch', 'arch'),
+              ('pkginfo.id', 'id'),
+              ('pkginfo.epoch', 'epoch'),
+              ('pkginfo.payloadhash', 'payloadhash'),
+              ('pkginfo.size', 'size'),
+              ('pkginfo.buildtime', 'buildtime'),
+              ('pkginfo.buildroot_id', 'buildroot_id'),
+              ('pkginfo.build_id', 'build_id')]
+    if pkgsigs:
+        fields.append(('pkgsigs.sigkey', 'sigkey'))
+    q="""SELECT %s FROM pkginfo
+    JOIN tag_listing ON pkginfo.build_id = tag_listing.build_id
+    """ % ', '.join([pair[0] for pair in fields])
+    if package:
+        q += """JOIN build ON pkginfo.build_id = build.id
+                JOIN package ON package.id = build.pkg_id
+         """
+    if pkgsigs:
+        q += """LEFT OUTER JOIN pkgsigs on pkginfo.id = pkgsigs.pkg_id
+        """
+    q += """WHERE %s AND tag_id=%%(tagid)s
+    """ % eventCondition(event)
+    if package:
+        q += """AND package.name = %(package)s
+        """
+    if arch:
+        if isinstance(arch, basestring):
+            q += """AND pkginfo.arch = %(arch)s
+            """
+        elif isinstance(arch, (list, tuple)):
+            q += """AND pkginfo.arch IN %(arch)s\n"""
+        else:
+            raise koji.GenericError, 'invalid arch option: %s' % arch
+
+    log_error("----qq:%s"%q)
+    # unique constraints ensure that each of these queries will not report
+    # duplicate rpminfo entries, BUT since we make the query multiple times,
+    # we can get duplicates if a package is multiply tagged.
+    pkgs = []
+    tags_seen = {}
+    for tagid in taglist:
+        if tags_seen.has_key(tagid):
+            #certain inheritance trees can (legitimately) have the same tag
+            #appear more than once (perhaps once with a package filter and once
+            #without). The hard part of that was already done by readTaggedBuilds.
+            #We only need consider each tag once. Note how we use build_idx below.
+            #(Without this, we could report the same rpm twice)
+            continue
+        else:
+            tags_seen[tagid] = 1
+        for pkginfo in _multiRow(q, locals(), [pair[1] for pair in fields]):
+            #note: we're checking against the build list because
+            # it has been filtered by the package list. The tag
+            # tools should endeavor to keep tag_listing sane w.r.t.
+            # the package list, but if there is disagreement the package
+            # list should take priority
+            build = build_idx.get(pkginfo['build_id'],None)
+            if build is None:
+                continue
+            elif build['tag_id'] != tagid:
+                #wrong tag
+                continue
+            pkgs.append(pkginfo)
+    return [pkgs,builds]
+
 
 def readTaggedArchives(tag, package=None, event=None, inherit=False, latest=True, type=None):
     """Returns a list of archives for specified tag
@@ -2058,7 +2149,8 @@ def repo_init(tag, with_src=False, with_debuginfo=False, event=None):
     _dml(q,locals())
     # Need to pass event_id because even though this is a single transaction,
     # it is possible to see the results of other committed transactions
-    rpms, builds = readTaggedRPMS(tag_id, event=event_id, inherit=True, latest=True)
+    #rpms, builds = readTaggedRPMS(tag_id, event=event_id, inherit=True, latest=True)
+    pkgs, builds = readTaggedPKGS(tag_id, event=event_id, inherit=True, latest=True)
     groups = readTagGroups(tag_id, event=event_id, inherit=True)
     blocks = [pkg for pkg in readPackageList(tag_id, event=event_id, inherit=True).values() \
                   if pkg['blocked']]
@@ -2070,10 +2162,10 @@ def repo_init(tag, with_src=False, with_debuginfo=False, event=None):
     packages = {}
     for repoarch in repo_arches:
         packages.setdefault(repoarch, [])
-    for rpminfo in rpms:
-        if not with_debuginfo and koji.is_debuginfo(rpminfo['name']):
+    for pkginfo in pkgs:
+        if not with_debuginfo and koji.is_debuginfo(pkginfo['name']):
             continue
-        arch = rpminfo['arch']
+        arch = pkginfo['arch']
         repoarch = koji.canonArch(arch)
         if arch == 'src':
             if not with_src:
@@ -2083,9 +2175,9 @@ def repo_init(tag, with_src=False, with_debuginfo=False, event=None):
         elif repoarch not in repo_arches:
             # Do not create a repo for arches not in the arch list for this tag
             continue
-        build = builds[rpminfo['build_id']]
-        rpminfo['path'] = "%s/%s" % (koji.pathinfo.build(build), koji.pathinfo.rpm(rpminfo))
-        packages.setdefault(repoarch,[]).append(rpminfo)
+        build = builds[pkginfo['build_id']]
+        pkginfo['path'] = "%s/%s" % (koji.pathinfo.build(build), koji.pathinfo.rpm(pkginfo))
+        packages.setdefault(repoarch,[]).append(pkginfo)
     #generate comps and groups.spec
     groupsdir = "%s/groups" % (repodir)
     koji.ensuredir(groupsdir)
@@ -2106,17 +2198,17 @@ def repo_init(tag, with_src=False, with_debuginfo=False, event=None):
         koji.ensuredir(archdir)
         pkglist = file(os.path.join(repodir, arch, 'pkglist'), 'w')
         logger.info("Creating package list for %s" % arch)
-        for rpminfo in packages[arch]:
-            pkglist.write(rpminfo['path'].split(os.path.join(koji.pathinfo.topdir, 'packages/'))[1] + '\n')
+        for pkginfo in packages[arch]:
+            pkglist.write(pkginfo['path'].split(os.path.join(koji.pathinfo.topdir, 'packages/'))[1] + '\n')
         #noarch packages
-        for rpminfo in packages.get('noarch',[]):
-            pkglist.write(rpminfo['path'].split(os.path.join(koji.pathinfo.topdir, 'packages/'))[1] + '\n')
+        for pkginfo in packages.get('noarch',[]):
+            pkglist.write(pkginfo['path'].split(os.path.join(koji.pathinfo.topdir, 'packages/'))[1] + '\n')
         # srpms
         if with_src:
             srpmdir = "%s/%s" % (repodir,'src')
             koji.ensuredir(srpmdir)
-            for rpminfo in packages.get('src',[]):
-                pkglist.write(rpminfo['path'].split(os.path.join(koji.pathinfo.topdir, 'packages/'))[1] + '\n')
+            for pkginfo in packages.get('src',[]):
+                pkglist.write(pkginfo['path'].split(os.path.join(koji.pathinfo.topdir, 'packages/'))[1] + '\n')
         pkglist.close()
         #write list of blocked packages
         blocklist = file(os.path.join(repodir, arch, 'blocklist'), 'w')
@@ -4091,6 +4183,34 @@ def check_noarch_rpms(basepath, rpms):
 
     return result
 
+def check_noarch_pkgs(basepath, pkgs):
+    """
+    If rpms contains any noarch rpms with identical names,
+    run rpmdiff against the duplicate rpms.
+    Return the list of rpms with any duplicate entries removed (only
+    the first entry will be retained).
+    """
+    result = []
+    noarch_rpms = {}
+    for relpath in rpms:
+        if relpath.endswith('.noarch.rpm'):
+            filename = os.path.basename(relpath)
+            if noarch_rpms.has_key(filename):
+                # duplicate found, add it to the duplicate list
+                # but not the result list
+                noarch_rpms[filename].append(relpath)
+            else:
+                noarch_rpms[filename] = [relpath]
+                result.append(relpath)
+        else:
+            result.append(relpath)
+
+    for noarch_list in noarch_rpms.values():
+        rpmdiff(basepath, noarch_list)
+
+    return result
+
+
 def import_build(srpm, rpms, brmap=None, task_id=None, build_id=None, logs=None):
     """Import a build into the database (single transaction)
 
@@ -4165,6 +4285,94 @@ def import_build(srpm, rpms, brmap=None, task_id=None, build_id=None, logs=None)
                 fn = "%s/%s" % (uploadpath,relpath)
                 import_build_log(fn, build, subdir=key)
     koji.plugin.run_callbacks('postImport', type='build', srpm=srpm, rpms=rpms, brmap=brmap,
+                              task_id=task_id, build_id=build_id, build=binfo, logs=logs)
+    return build
+
+
+def import_build_pkgs(spkg, pkgs, brmap=None, task_id=None, build_id=None, logs=None):
+    """Import a build into the database (single transaction)
+
+    Files must be uploaded and specified with path relative to the workdir
+    Args:
+        spkg - relative path of spkg
+        pkgs - list of pkgs (relative paths)
+        brmap - dictionary mapping [s]pkgs to buildroot ids
+        task_id - associate the build with a task
+        build_id - build is a finalization of existing entry
+    """
+    main_spkg = None
+    for sp in spkg:
+        if sp.endswith('.src.rpm') or sp.endswith('.dsc'):
+            main_spkg = sp
+    if brmap is None:
+        brmap = {}
+    koji.plugin.run_callbacks('preImport', type='build', srpm=main_spkg, rpms=pkgs, brmap=brmap,
+                              task_id=task_id, build_id=build_id, build=None, logs=logs)
+    uploadpath = koji.pathinfo.work()
+    #verify files exist
+    for relpath in [main_spkg] + pkgs:
+        fn = "%s/%s" % (uploadpath,relpath)
+        if not os.path.exists(fn):
+            raise koji.GenericError, "no such file: %s" % fn
+
+    pkgs = check_noarch_pkgs(uploadpath, pkgs)
+
+    #verify buildroot ids from brmap
+    found = {}
+    for br_id in brmap.values():
+        if found.has_key(br_id):
+            continue
+        found[br_id] = 1
+        #this will raise an exception if the buildroot id is invalid
+        BuildRoot(br_id)
+
+    #read srpm info
+    fn = "%s/%s" % (uploadpath,main_spkg)
+    #build = koji.get_header_fields(fn,('name','version','release','epoch',
+    #                                    'sourcepackage'))
+    build = koji.createPkgInfo(fn).getinfo()
+
+    if build['sourcepackage'] != 1:
+        raise koji.GenericError, "not a source package: %s" % fn
+    build['task_id'] = task_id
+    if build_id is None:
+        build_id = new_build(build)
+        binfo = get_build(build_id, strict=True)
+    else:
+        #build_id was passed in - sanity check
+        binfo = get_build(build_id, strict=True)
+        st_complete = koji.BUILD_STATES['COMPLETE']
+        koji.plugin.run_callbacks('preBuildStateChange', attribute='state', old=binfo['state'], new=st_complete, info=binfo)
+        for key in ('name','version','release','epoch','task_id'):
+            if build[key] != binfo[key]:
+                raise koji.GenericError, "Unable to complete build: %s mismatch (build: %s, rpm: %s)" % (key, binfo[key], build[key])
+        if binfo['state'] != koji.BUILD_STATES['BUILDING']:
+            raise koji.GenericError, "Unable to complete build: state is %s" \
+                    % koji.BUILD_STATES[binfo['state']]
+        #update build state
+        update = """UPDATE build SET state=%(st_complete)i,completion_time=NOW()
+        WHERE id=%(build_id)i"""
+        _dml(update,locals())
+        koji.plugin.run_callbacks('postBuildStateChange', attribute='state', old=binfo['state'], new=st_complete, info=binfo)
+    build['id'] = build_id
+    # now to handle the individual rpms
+    for relpath in [main_spkg] + pkgs:
+        fn = "%s/%s" % (uploadpath,relpath)
+        pkginfo = import_pkg(fn,build,brmap.get(relpath))
+        import_pkg_file(fn,build,pkginfo)
+        if "rpm" == pkginfo['type']:
+            add_pkg_sig(pkginfo['id'], koji.rip_rpm_sighdr(fn))
+        else:
+            add_pkg_sig(pkginfo['id'], None)
+       # add_rpm_sig(rpminfo['id'], koji.rip_rpm_sighdr(fn))
+    if logs:
+        for key, files in logs.iteritems():
+            if not key:
+                key = None
+            for relpath in files:
+                fn = "%s/%s" % (uploadpath,relpath)
+                import_build_log(fn, build, subdir=key)
+    koji.plugin.run_callbacks('postImport', type='build', srpm=main_spkg, rpms=pkgs, brmap=brmap,
                               task_id=task_id, build_id=build_id, build=binfo, logs=logs)
     return build
 
@@ -6607,7 +6815,7 @@ class RootExports(object):
             taskOpts['channel'] = channel
         build_target = get_build_target(target) 
         dest_tag = get_tag(build_target['dest_tag'])
-        buildcmd = "%s::build"%dest_tag['pm_name']
+        buildcmd = "::build"
         return make_task(buildcmd,[src, target, opts],**taskOpts)
 
     def chainBuild(self, srcs, target, opts=None, priority=None, channel=None):
@@ -8236,7 +8444,7 @@ class RootExports(object):
         if debuginfo:
             opts['debuginfo'] = True
         args = koji.encode_args(tag, **opts)
-        return make_task('newRepo', args, priority=15, channel='createrepo')
+        return make_task('::newRepo', args, priority=15, channel='createrepo')
 
     def repoExpire(self, repo_id):
         """mark repo expired"""
@@ -9513,7 +9721,7 @@ class HostExports(object):
         host.verify()
         task = Task(task_id)
         task.assertHost(host.id)
-        result = import_build(srpm, rpms, brmap, task_id, build_id, logs=logs)
+        result = import_build_pkgs(srpm, rpms, brmap, task_id, build_id, logs=logs)
         build_notification(task_id, build_id)
         return result
 
