@@ -1,3 +1,9 @@
+koji (1.6.0-2) unstable; urgency=low
+
+  * add deb import,build,create repo
+
+ -- Suchun Chen <chensuchun@ccoss.com.cn>  Thu, 23 Jun 2011 09:35:33 +0800
+
 koji (1.6.0-1) unstable; urgency=low
 
   * Initial build
