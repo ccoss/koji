@@ -4642,7 +4642,7 @@ def import_pkg_file(fn,buildinfo,pkginfo):
     Generally this is done after the db import
     """
     src_dst = []
-    buildinfo['pmanager'] = get_package_manager(pkginfo['type'])['name']
+    buildinfo['pm_name'] = get_package_manager(pkginfo['type'])['name']
     for f in pkginfo['files']:
         """path md5sum size"""
         src_dst.append((f['path'],"%s/%s/%s"%(koji.pathinfo.build(buildinfo),pkginfo['arch'],os.path.basename(f['path']))))

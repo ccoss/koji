@@ -1367,7 +1367,7 @@ def handle_import(options, session, args):
             files = data['files']
             ln=[]
             for f in files:
-                ln.append( (f['path'],"%s/%s/%s" % (koji.pathinfo.work(), serverdir, os.path.basename(f['file']))))
+                ln.append( (f['path'],"%s/%s/%s" % (koji.pathinfo.work(), serverdir, os.path.basename(f['path']))))
             for src,dst in ln:
                 koji.ensuredir(os.path.dirname(dst))
                 os.chown(os.path.dirname(dst), 48, 48)  #XXX - hack
