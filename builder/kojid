@@ -389,6 +389,7 @@ class DpkgBuildRoot(BuildRoot):
                 pkg.update(koji.dpkg.parseVersion(pkg['Version']))
                 ret.append(pkg)
         finally:
+                pass		
             
         #self.markExternalRPMs(ret)
         return ret
@@ -614,7 +615,7 @@ class RpmBuildRoot(BuildRoot):
         args = ['--no-clean']
         if arch:
             args.extend(['--target', arch])
-        args.extend(['--rebuild', srpm])
+        args.extend(['--rebuild', srpm[0]])
         rv = self.mock(args)
 
         self.session.host.updateBuildRootList(self.id,self.getPackageList())
@@ -925,7 +926,7 @@ class BuildTask(BaseTaskHandler):
             self.event_id = self.session.getLastEvent()['id']
         taginfo = self.session.getTag(build_tag['id'], event=self.event_id)
         build_tag['pm_name'] = taginfo['pm_name']
-        spkgs = self.getSPKG(src, build_tag, repo_info['id'])
+        spkgs=self.getSPKG(src, build_tag, repo_info['id'])
         data = self.getSPKGInfo(spkgs)
 #        data = koji.get_header_fields(h,['name','version','release','epoch'])
         data['task_id'] = self.id
@@ -952,9 +953,11 @@ class BuildTask(BaseTaskHandler):
         #(initBuild raises an exception if there is a conflict)
         try:
             spkgs,pkgs,brmap,logs = self.runBuilds(spkgs,build_tag,archlist,repo_info['id'])
+            self.logger.info("after self.runBuilds")
             if opts.get('scratch'):
                 #scratch builds do not get imported
                 self.session.host.moveBuildToScratch(self.id,spkgs,pkgs,logs=logs)
+                self.logger.info("after self.session.host.moveBuildToScratch")
             else:
                 self.session.host.completeBuild(self.id,build_id,spkgs,pkgs,brmap,logs=logs)
         except (SystemExit,ServerExit,KeyboardInterrupt):
@@ -976,7 +979,7 @@ class BuildTask(BaseTaskHandler):
                 return self.getSPKGFromSCM(src, build_tag, repo_id)
             else:
                 #assume this is a path under uploads
-                return src
+                return [src]
         else:
             raise koji.BuildError, 'Invalid source specification: %s' % src
             #XXX - other methods?
@@ -995,7 +998,9 @@ class BuildTask(BaseTaskHandler):
     def getSPKGInfo(self, spkgs):
         #srpm arg should be a path relative to <BASEDIR>/work
         self.logger.debug("Reading SPKG")
+	spkg =None
         for f in spkgs:
+            self.logger.debug("getSPKGInfo:%s"%f)
             if f.endswith('.src.rpm') or f.endswith('.dsc') :
                 spkg = f
                 break
@@ -1112,6 +1117,15 @@ class BuildTask(BaseTaskHandler):
                                        arch='noarch')
         self.wait(task_id)
 
+def getMainSpkg(spkgs):
+    spkg =None
+    for f in spkgs:
+        if f.endswith('.src.rpm') or f.endswith('.dsc') :
+            spkg = f
+            break
+    return spkg
+
+
 class BuildArchTask(BaseTaskHandler):
 
 #    Methods = ['::buildArch']
@@ -1140,9 +1154,12 @@ class BuildArchTask(BaseTaskHandler):
     def spkg_sanity_checks(self, filename):
         pass
 
-    def spkg_files_check(self, fn):
+    def spkg_files_check(self, spkgs):
+        spkg = getMainSpkg(spkgs)
+        fn = self.localPath("work/%s" % spkg)
         if not os.path.exists(fn):
             raise koji.BuildError, "SPKG file missing: %s" % fn
+        data = koji.createPkgInfo(fn).getInfo()
         # peel E:N-V-R from package
 #        h = koji.get_rpm_header(fn)
 #        name = h[rpm.RPMTAG_NAME]
@@ -1150,12 +1167,14 @@ class BuildArchTask(BaseTaskHandler):
 #        rel = h[rpm.RPMTAG_RELEASE]
 #        epoch = h[rpm.RPMTAG_EPOCH]
 #        if h[rpm.RPMTAG_SOURCEPACKAGE] != 1:
-#            raise koji.BuildError, "not a source package"
+        if data['sourcepackage'] != 1:
+            raise koji.BuildError, "not a source package"
+        self.updateWeight(data['name'])
 
     def getResultFiles(self, resultdir):
         pass
 
-    def createBuildRoot(session, options, *args,**kwargs):
+    def createBuildRoot(self, session, options, *args,**kwargs):
         pass
 
     def handler(self, pkg, root, arch, keep_srpm, opts=None):
@@ -1172,20 +1191,19 @@ class BuildArchTask(BaseTaskHandler):
         # starting srpm should already have been uploaded by parent
         self.logger.debug("Reading SPKG")
         # get spkg files
-        fn = self.localPath("work/%s" % pkg)
-        self.spkg_files_check(fn)
+#        fn = self.localPath("work/%s" % pkg)
+        self.spkg_files_check(pkg)
         # Disable checking for distribution in the initial SRPM because it
         # might have been built outside of the build system
         # if not h[rpm.RPMTAG_DISTRIBUTION]:
         #    raise koji.BuildError, "the distribution tag is not set in the original srpm"
 
-        self.updateWeight(name)
 
         rootopts = {
             'repo_id': repo_id
             }
         br_arch = self.find_arch(arch, self.session.host.getHost(), self.session.getBuildConfig(root, event=event_id))
-        broot = createBuildRoot(self.session, self.options, root, br_arch, self.id, **rootopts)
+        broot = self.createBuildRoot(self.session, self.options, root, br_arch, self.id, **rootopts)
         broot.workdir = self.workdir
 
         self.logger.debug("Initializing buildroot")
@@ -1193,7 +1211,7 @@ class BuildArchTask(BaseTaskHandler):
 
         # run build
         self.logger.debug("Running build")
-        broot.build(fn,arch)
+        broot.build(pkg,arch)
 
         # extract results
         resultdir = broot.resultdir()
@@ -1269,7 +1287,8 @@ class RpmBuildArchTask(BuildArchTask):
             else:
                 self.unexpected.append(f)
        
-    def createBuildRoot(session, options, *args, **kwargs):
+    def createBuildRoot(self, session, options, *args, **kwargs):
+        #self.logger.debug("RpmBuildArchTask:createBuildRoot  %r--%r" % (args, kwargs))
         return RpmBuildRoot(session, options, *args, **kwargs)
 
 class DpkgBuildArchTask(BuildArchTask):
@@ -1296,7 +1315,7 @@ class DpkgBuildArchTask(BuildArchTask):
             for s in self.spkg_files:
                 self.unexpected.remove(s)
        
-    def createBuildRoot(session, options, *args, **kwargs):
+    def createBuildRoot(self, session, options, *args, **kwargs):
         return DpkgBuildRoot(session, options, *args, **kwargs)
 
 
@@ -2349,7 +2368,7 @@ class BuildSPKGFromSCMTask(BaseTaskHandler):
 #    Methods = ['::buildSPKGFromSCM']
     _taskWeight = 1.0
 
-    def createBuildRoot(session, options, *args, **kwargs):
+    def createBuildRoot(self, session, options, *args, **kwargs):
         raise koji.BuildError, "This method is not implemented by subclass!" 
 
     def preBuild(self, sourcedir, scmdir):
@@ -2382,7 +2401,7 @@ class BuildSPKGFromSCMTask(BaseTaskHandler):
                     'setup_dns': True,
                     'repo_id': repo_id}
         br_arch = self.find_arch('noarch', self.session.host.getHost(), self.session.getBuildConfig(build_tag['id'], event=event_id))
-        broot = createBuildRoot(self.session, self.options, build_tag['id'], br_arch, self.id, **rootopts)
+        broot = self.createBuildRoot(self.session, self.options, build_tag['id'], br_arch, self.id, **rootopts)
         broot.workdir = self.workdir
 
         self.logger.debug("Initializing buildroot")
@@ -2426,7 +2445,7 @@ class RpmBuildSPKGFromSCMTask(BuildSPKGFromSCMTask):
     _taskWeight = 1.0
 
 
-    def createBuildRoot(session, options, *args, **kwargs):
+    def createBuildRoot(self, session, options, *args, **kwargs):
         return RpmBuildRoot(session, options, *args, **kwargs)
 
     def preBuild(self, sourcedir, scmdir):
@@ -2491,7 +2510,7 @@ class DpkgBuildSPKGFromSCMTask(BuildSPKGFromSCMTask):
     _taskWeight = 1.0
 
 
-    def createBuildRoot(session, options, *args, **kwargs):
+    def createBuildRoot(self, session, options, *args, **kwargs):
         return DpkgBuildRoot(session, options, *args, **kwargs)
 
     def preBuild(self, sourcedir, scmdir):
@@ -3168,6 +3187,7 @@ def get_options():
             quit('invalid section found in config file: %s' % x)
     defaults = {'sleeptime': 15,
                 'pm_name': 'dpkg',
+                'debug': False,
                 'maxjobs': 10,
                 'minspace': 8192,
                 'admin_emails': None,

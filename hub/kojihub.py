@@ -4614,6 +4614,71 @@ def add_external_rpm(rpminfo, external_repo, strict=True):
 
     return get_rpm(rpminfo['id'])
 
+def add_external_pkg(pkginfo, external_repo, strict=True):
+    """Add an external pkg entry to the pkginfo table
+
+    Differences from import_pkg:
+        - entry will have non-zero external_repo_id
+        - entry will not reference a build
+        - pkg not available to us -- the necessary data is passed in
+
+    The pkginfo arg should contain the following fields:
+        - name, version, release, epoch, arch, payloadhash, size, buildtime
+
+    Returns info as get_pkg
+    """
+
+    # [!] Calling function should perform access checks
+
+    #sanity check rpminfo
+    dtypes = (
+        ('name', basestring),
+        ('version', basestring),
+        ('release', basestring),
+        ('epoch', (int, types.NoneType)),
+        ('arch', basestring),
+        ('payloadhash', str),
+        ('size', int),
+        ('buildtime', (int, long)))
+    for field, allowed in dtypes:
+        if not pkginfo.has_key(field):
+            raise koji.GenericError, "%s field missing: %r" % (field, pkginfo)
+        if not isinstance(pkginfo[field], allowed):
+            #this will catch unwanted NULLs
+            raise koji.GenericError, "Invalid value for %s: %r" % (field, pkginfo[field])
+    #TODO: more sanity checks for payloadhash
+
+    #Check to see if we have it
+    data = pkginfo.copy()
+    data['location'] = external_repo
+    previous = get_pkg(data, strict=False)
+    if previous:
+        disp = "%(name)s-%(version)s-%(release)s.%(arch)s@%(external_repo_name)s" % previous
+        if strict:
+            raise koji.GenericError, "external pkg already exists: %s" % disp
+        elif data['payloadhash'] != previous['payloadhash']:
+            raise koji.GenericError, "hash changed for external pkg: %s (%s -> %s)" \
+                    % (disp,  previous['payloadhash'], data['payloadhash'])
+        else:
+            return previous
+
+    #add rpminfo entry
+    pkginfo['external_repo_id'] = get_external_repo_id(external_repo, strict=True)
+    pkginfo['id'] = _singleValue("""SELECT nextval('rpminfo_id_seq')""")
+    q = """INSERT INTO pkginfo (id, build_id, buildroot_id,
+            name, version, release, epoch, arch,
+            external_repo_id,
+            payloadhash, size, buildtime)
+    VALUES (%(id)i, NULL, NULL,
+            %(name)s, %(version)s, %(release)s, %(epoch)s, %(arch)s,
+            %(external_repo_id)i,
+            %(payloadhash)s, %(size)i, %(buildtime)i)
+    """
+    _dml(q, pkginfo)
+
+    return get_pkg(pkginfo['id'])
+
+
 def import_build_log(fn, buildinfo, subdir=None):
     """Move a logfile related to a build to the right place"""
     logdir = koji.pathinfo.build_logs(buildinfo)
@@ -9187,9 +9252,9 @@ class BuildRoot(object):
             raise koji.GenericError, "buildroot not specified"
         brootid = self.id
         fields = (
-            ('rpm_id', 'rpm_id'),
+            ('pkg_id', 'pkg_id'),
             ('is_update', 'is_update'),
-            ('rpminfo.name', 'name'),
+            ('pkginfo.name', 'name'),
             ('version', 'version'),
             ('release', 'release'),
             ('epoch', 'epoch'),
@@ -9200,49 +9265,49 @@ class BuildRoot(object):
             )
         query = QueryProcessor(columns=[f[0] for f in fields], aliases=[f[1] for f in fields],
                         tables=['buildroot_listing'],
-                        joins=["rpminfo ON rpm_id = rpminfo.id", "external_repo ON external_repo_id = external_repo.id"],
+                        joins=["pkginfo ON pkg_id = pkginfo.id", "external_repo ON external_repo_id = external_repo.id"],
                         clauses=["buildroot_listing.buildroot_id = %(brootid)i"],
                         values=locals())
         return query.execute()
 
-    def _setList(self,rpmlist,update=False):
+    def _setList(self,pkglist,update=False):
         """Set or update the list of rpms in a buildroot"""
         if self.id is None:
             raise koji.GenericError, "buildroot not specified"
         brootid = self.id
         if update:
-            current = dict([(r['rpm_id'],1) for r in self.getList()])
-        q = """INSERT INTO buildroot_listing (buildroot_id,rpm_id,is_update)
-        VALUES (%(brootid)s,%(rpm_id)s,%(update)s)"""
-        rpm_ids = []
-        for an_rpm in rpmlist:
-            location = an_rpm.get('location')
+            current = dict([(r['pkg_id'],1) for r in self.getList()])
+        q = """INSERT INTO buildroot_listing (buildroot_id,pkg_id,is_update)
+        VALUES (%(brootid)s,%(pkg_id)s,%(update)s)"""
+        pkg_ids = []
+        for an_pkg in pkglist:
+            location = an_pkg.get('location')
             if location:
-                data = add_external_rpm(an_rpm, location, strict=False)
+                data = add_external_pkg(an_pkg, location, strict=False)
                 #will add if missing, compare if not
             else:
-                data = get_rpm(an_rpm, strict=True)
-            rpm_id = data['id']
-            if update and current.has_key(rpm_id):
+                data = get_pkg(an_pkg, strict=True)
+            pkg_id = data['id']
+            if update and current.has_key(pkg_id):
                 #ignore duplicate packages for updates
                 continue
-            rpm_ids.append(rpm_id)
+            pkg_ids.append(pkg_id)
         #we sort to try to avoid deadlock issues
-        rpm_ids.sort()
-        for rpm_id in rpm_ids:
+        pkg_ids.sort()
+        for pkg_id in pkg_ids:
             _dml(q, locals())
 
-    def setList(self,rpmlist):
+    def setList(self,pkglist):
         """Set the initial list of rpms in a buildroot"""
         if self.data['state'] != koji.BR_STATES['INIT']:
             raise koji.GenericError, "buildroot %(id)s in wrong state %(state)s" % self.data
-        self._setList(rpmlist,update=False)
+        self._setList(pkglist,update=False)
 
-    def updateList(self,rpmlist):
+    def updateList(self,pkglist):
         """Update the list of packages in a buildroot"""
         if self.data['state'] != koji.BR_STATES['BUILDING']:
             raise koji.GenericError, "buildroot %(id)s in wrong state %(state)s" % self.data
-        self._setList(rpmlist,update=True)
+        self._setList(pkglist,update=True)
 
     def getArchiveList(self, queryOpts=None):
         """Get the list of archives in the buildroot"""
@@ -9703,6 +9768,7 @@ class HostExports(object):
         This is done at the very beginning of the build to inform the
         system the build is underway.
         """
+	log_error("initBuild");
         host = Host()
         host.verify()
         #sanity checks
@@ -10058,6 +10124,7 @@ class HostExports(object):
         return br.setState(state)
 
     def setBuildRootList(self,brootid,rpmlist,task_id=None):
+	log_error("xxxxxxxxxx  setBuildRootList")
         host = Host()
         host.verify()
         if task_id is not None:
@@ -10069,6 +10136,7 @@ class HostExports(object):
         return br.setList(rpmlist)
 
     def updateBuildRootList(self,brootid,rpmlist,task_id=None):
+	log_error("xxxxxxxxxxupdateBuildRootList")
         host = Host()
         host.verify()
         if task_id is not None:
