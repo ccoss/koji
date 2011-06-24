@@ -640,10 +640,10 @@ CREATE INDEX buildroot_listing_pkgs ON buildroot_listing(pkg_id);
 -- tracks the contents of an image
 CREATE TABLE imageinfo_listing (
 	image_id INTEGER NOT NULL REFERENCES imageinfo(id),
-	rpm_id INTEGER NOT NULL REFERENCES pkginfo(id),
-	UNIQUE (image_id, rpm_id)
+	pkg_id INTEGER NOT NULL REFERENCES pkginfo(id),
+	UNIQUE (image_id, pkg_id)
 ) WITHOUT OIDS;
-CREATE INDEX imageinfo_listing_rpms on imageinfo_listing(rpm_id);
+CREATE INDEX imageinfo_listing_pkgs on imageinfo_listing(pkg_id);
 
 CREATE TABLE log_messages (
     id SERIAL NOT NULL PRIMARY KEY,
