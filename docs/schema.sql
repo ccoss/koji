@@ -631,11 +631,11 @@ CREATE TABLE pkgsigs (
 -- buildroot_listing needs to be created after pkginfo so it can reference it
 CREATE TABLE buildroot_listing (
 	buildroot_id INTEGER NOT NULL REFERENCES buildroot(id),
-	rpm_id INTEGER NOT NULL REFERENCES pkginfo(id),
+	pkg_id INTEGER NOT NULL REFERENCES pkginfo(id),
 	is_update BOOLEAN NOT NULL DEFAULT FALSE,
-	UNIQUE (buildroot_id,rpm_id)
+	UNIQUE (buildroot_id,pkg_id)
 ) WITHOUT OIDS;
-CREATE INDEX buildroot_listing_rpms ON buildroot_listing(rpm_id);
+CREATE INDEX buildroot_listing_pkgs ON buildroot_listing(pkg_id);
 
 -- tracks the contents of an image
 CREATE TABLE imageinfo_listing (
