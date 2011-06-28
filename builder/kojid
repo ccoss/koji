@@ -1155,8 +1155,8 @@ class BuildArchTask(BaseTaskHandler):
         pass
 
     def spkg_files_check(self, spkgs):
-        spkg = getMainSpkg(spkgs)
-        fn = self.localPath("work/%s" % spkg)
+        fn = getMainSpkg(spkgs)
+#        fn = self.localPath("work/%s" % spkg)
         if not os.path.exists(fn):
             raise koji.BuildError, "SPKG file missing: %s" % fn
         data = koji.createPkgInfo(fn).getInfo()
@@ -1192,6 +1192,8 @@ class BuildArchTask(BaseTaskHandler):
         self.logger.debug("Reading SPKG")
         # get spkg files
 #        fn = self.localPath("work/%s" % pkg)
+        for i in range(len(pkg)):
+            pkg[i] = self.localPath("work/%s" % pkg[i])
         self.spkg_files_check(pkg)
         # Disable checking for distribution in the initial SRPM because it
         # might have been built outside of the build system
