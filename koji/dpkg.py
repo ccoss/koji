@@ -51,7 +51,8 @@ class DscInfo(PkgInfo):
     pkg_re = re.compile(r'\bSource:\s*(?P<pkg>.+)\s*\n')
     buildarchs_re = re.compile(r'\b:Architecture\s*(?P<buildarchs>.+)\s*\n')
     format_re = re.compile(r'\bFormat:\s*(?P<format>[0-9.]+)\s*\n')
-    files_re = re.compile(r'\bFiles:\s*\n(?P<files>((\s+[^\n]+\n)+))')
+    files_re = re.compile(r'\bFiles:\s*\n(?P<files>(([ ]+[^\n]+\n)+))')
+    version_re = re.compile(r'\bVersion:\s*((?P<epoch>\d+)\:)?(?P<version>[%s]+)\s*\n' % debian_version_chars)
 
     def getInfo(self):
         ret={}
@@ -92,18 +93,22 @@ class DscInfo(PkgInfo):
         ret['files']=[{"md5sum":"0","size":"0","path":self.path}]
         m = self.files_re.search(content)
         if m:
+            #print "--------- %r" % m.group('files')
             for l in m.group('files').lstrip().rstrip().split("\n"):
-                ss=l.lstrip().rstrip().split(" ")
-                fileinfo={}
-                fileinfo['md5sum'] = ss[0]
-                fileinfo['size'] = ss[1]
-                fileinfo['path'] = os.path.join(fromdir,ss[2])
-                ret['files'].append(fileinfo)
+                #print "--------- %r" % l
+                if len(l) > 0 :
+                    ss=l.lstrip().rstrip().split(" ")
+                    fileinfo={}
+                    fileinfo['md5sum'] = ss[0]
+                    fileinfo['size'] = ss[1]
+                    fileinfo['path'] = os.path.join(fromdir,ss[2])
+                    ret['files'].append(fileinfo)
 
         f.close()
         return ret
 
 class DebInfo(PkgInfo):
+    version_re = re.compile(r'\bVersion:\s*((?P<epoch>\d+)\:)?(?P<version>[%s]+)\s*\n' % debian_version_chars)
 
     def getInfo(self):
         ret={}
