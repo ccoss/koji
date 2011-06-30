@@ -108,7 +108,8 @@ class DscInfo(PkgInfo):
         return ret
 
 class DebInfo(PkgInfo):
-    version_re = re.compile(r'\bVersion:\s*((?P<epoch>\d+)\:)?(?P<version>[%s]+)\s*\n' % debian_version_chars)
+
+    version_re = re.compile(r'((?P<epoch>\d+)\:)?(?P<version>[%s]+)\s*$' % debian_version_chars)
 
     def getInfo(self):
         ret={}
@@ -120,7 +121,7 @@ class DebInfo(PkgInfo):
         deb = debfile.DebFile(self.path)
         info = deb.debcontrol()
         ret['name'] = info['Package']
-        m = self.version_re.match(info ['Version'])
+        m = self.version_re.match(info['Version'])
         if m :
             if '-' in m.group('version'):
                 ret['release'] = m.group('version').split("-")[-1]
@@ -134,9 +135,18 @@ class DebInfo(PkgInfo):
                 ret['epoch'] = m.group('epoch')
             else:
                 ret['epoch'] = None
-        ret['arch'] = info ['Architecture']
-        if info ['Source']:
-            (self.spkgname,VR) = info ['Source'].split(" ")
+        ret['arch'] = info['Architecture']
+        self.spkgname = ''
+        self.spkgversion = ''
+        self.spkgrelease = ''
+        if info.has_key('Source'):
+            l = info['Source'].split(" ")
+            self.spkgname = l[0]
+            #print "mmmmmmmm %s %s" % (info['Source'],self.spkgname)
+            VR = None
+            if len(l) > 1:
+                VR = l[1]
+            #(self.spkgname,VR) = info['Source'].split(" ")
             if VR:
                 VR = VR.strip("(").strip(")")
                 m = self.version_re.match(VR)
@@ -150,13 +160,17 @@ class DebInfo(PkgInfo):
             else:
                 self.spkgversion = ret['version']
                 self.spkgrelease = ret['release']
+                #print "not VR  %s %s" % (self.spkgversion,self.spkgrelease)
         else:
-            if ret['arch'] == "all":
-                self.spkgname = ret['name']
+            #if ret['arch'] == "all":
+            self.spkgname = ret['name']
+            self.spkgversion = ret['version']
+            self.spkgrelease = ret['release']
         ret['sourceNVRA'] = self.spkgname + "-"
         ret['sourceNVRA'] +=  self.spkgversion + "-"
         ret['sourceNVRA'] +=  self.spkgrelease + "."
         ret['sourceNVRA'] +=  ret['arch']
+        #print "sourceNVRA  %s %s" % (ret['name'],ret['sourceNVRA'])
 
         fileinfo={}
         fileinfo['size']="%d"%os.path.getsize(self.path)
