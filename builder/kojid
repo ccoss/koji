@@ -3024,9 +3024,11 @@ class DpkgCreaterepoTask(BaseTaskHandler):
         return [uploadpath, files]
 
     def create_local_repo(self, rinfo, arch, pkglist, groupdata, oldrepo):
+        koji.ensuredir(self.workdir)
         koji.ensuredir(self.outdir)
         koji.ensuredir(self.datadir)
-        cmd = ["cd %s && /usr/bin/dpkg-scanpackages"%self.pathinfo.topdir, '-a', arch, 'packages/dpkg', '| gzip -9c >', "%s/Packages.gz"%self.datadir ]
+        #os.chdir(self.pathinfo.topdir)
+        cmd = ["/usr/bin/koji-scanpackages", '-a', arch, 'packages/dpkg', '/dev/null', "%s/Packages.gz"%self.datadir, self.pathinfo.topdir ]
         #for test
         #testcmd = ['touch',"%s/Package.gz"%self.datadir]
         #self.logger.warn("----------%s" % " ".join(cmd))        
@@ -3039,7 +3041,7 @@ class DpkgCreaterepoTask(BaseTaskHandler):
                     % parseStatus(status, ' '.join(cmd))
 
         slist="""
-deb file://%s repo/%s/%s/%s/repodata \n
+deb file://%s repos/%s/%s/%s/repodata/ \n
 """%(self.pathinfo.topdir,rinfo['tag_name'],rinfo['id'],arch) 
         #self.logger.warn("==========%s" % slist)        
         
