@@ -166,7 +166,7 @@ class DebInfo(PkgInfo):
             self.spkgname = ret['name']
             self.spkgversion = ret['version']
             self.spkgrelease = ret['release']
-        ret['sourceNVRA'] = self.spkgname + "-"
+        ret['sourceNVRA'] = self.spkgname + "_"
         ret['sourceNVRA'] +=  self.spkgversion + "-"
         ret['sourceNVRA'] +=  self.spkgrelease + "."
         ret['sourceNVRA'] +=  ret['arch']
