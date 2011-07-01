@@ -833,7 +833,7 @@ def parse_NVR(nvr):
     p2 = nvr.rfind("-",0)
     if p2 == -1 or p2 == len(nvr) - 1:
         raise GenericError("invalid format: %s" % nvr)
-    p1 = nvr.rfind("-",0,p2)
+    p1 = nvr.rfind("_",0,p2)
     if p1 == -1 or p1 == p2 - 1:
         raise GenericError("invalid format: %s" % nvr)
     ret['release'] = nvr[p2+1:]
@@ -2047,9 +2047,12 @@ def taskLabel(taskInfo):
             extra = _module_info(url)
     elif method_main == 'buildArch':
         if taskInfo.has_key('request'):
-            srpm, tagID, arch = taskInfo['request'][:3]
-            srpm = os.path.basename(srpm)
-            extra = '%s, %s' % (srpm, arch)
+            spkgs, tagID, arch = taskInfo['request'][:3]
+            files=[]
+            for f in spkgs:
+                files.append(os.path.basename(f))
+            #srpm = os.path.basename(srpm)
+            extra = '%s; %s' % (",".join(files), arch)
     elif method_main == 'buildMaven':
         if taskInfo.has_key('request'):
             build_tag = taskInfo['request'][1]
@@ -2246,7 +2249,7 @@ class RpmInfo(PkgInfo):
     def getInfo(self):
         fields = ('name','version','release','epoch','arch','sigmd5','sourcepackage','sourcerpm','buildtime','buildarchs','exclusivearch','excludearch')
         ret = get_header_fields(self.path, fields)
-        ret['sourceNVRA'] = ret['sourcerpm']
+        ret['sourceNVRA'] = ret['sourcerpm'].replace('-','_',1)
         ret['type'] = "rpm"
         if ret['sourcepackage']:
             ret['arch'] = 'src'
