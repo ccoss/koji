@@ -1310,9 +1310,9 @@ def handle_import(options, session, args):
 
         if data['sourcepackage']:
             data['arch'] = 'src'
-            nvr = "%(name)s-%(version)s-%(release)s" % data
+            nvr = "%(name)s_%(version)s-%(release)s" % data
         else:
-            nvr = "%(name)s-%(version)s-%(release)s" % koji.parse_NVRA(data['sourceNVRA'])
+            nvr = "%(name)s_%(version)s-%(release)s" % koji.parse_NVRA(data['sourceNVRA'])
         to_import.setdefault(nvr,[]).append((path,data))
     builds_missing = False
     nvrs = to_import.keys()
