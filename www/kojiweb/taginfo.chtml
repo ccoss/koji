@@ -17,6 +17,9 @@
       <th>ID</th><td>$tag.id</td>
     </tr>
     <tr>
+      <th>Package manager</th><td>$tag.pm_name</td>
+    </tr>
+    <tr>
       <th>Arches</th><td>$tag.arches</td>
     </tr>
     <tr>

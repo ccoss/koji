@@ -47,6 +47,7 @@
     <tr class="list-header">
       <th><a href="hosts?order=$util.toggleOrder($self, 'id')$util.passthrough_except($self, 'order')">ID</a> $util.sortImage($self, 'id')</th>
       <th><a href="hosts?order=$util.toggleOrder($self, 'name')$util.passthrough_except($self, 'order')">Name</a> $util.sortImage($self, 'name')</th>
+      <th><a href="hosts?order=$util.toggleOrder($self, 'pm_name')$util.passthrough_except($self, 'order')">Package manager</a> $util.sortImage($self, 'pm_name')</th>
       <th><a href="hosts?order=$util.toggleOrder($self, 'arches')$util.passthrough_except($self, 'order')">Arches</a> $util.sortImage($self, 'arches')</th>
       <th><a href="hosts?order=$util.toggleOrder($self, 'enabled')$util.passthrough_except($self, 'order')">Enabled?</a> $util.sortImage($self, 'enabled')</th>
       <th><a href="hosts?order=$util.toggleOrder($self, 'ready')$util.passthrough_except($self, 'order')">Ready?</a> $util.sortImage($self, 'ready')</th>
@@ -57,6 +58,7 @@
         <tr class="$util.rowToggle($self)">
           <td>$host.id</td>
           <td><a href="hostinfo?hostID=$host.id">$host.name</a></td>
+          <td>$host.pm_name</td>
           <td>$host.arches</td>
           <td class="$str($bool($host.enabled)).lower()">#if $host.enabled then $util.imageTag('yes') else $util.imageTag('no')#</td>
           <td class="$str($bool($host.ready)).lower()">#if $host.ready then $util.imageTag('yes') else $util.imageTag('no')#</td>

@@ -65,6 +65,7 @@
     <tr class="list-header">
       <th><a href="packages?order=$util.toggleOrder($self, 'package_id')$util.passthrough($self, 'userID', 'tagID', 'prefix', 'inherited')">ID</a> $util.sortImage($self, 'package_id')</th>
       <th><a href="packages?order=$util.toggleOrder($self, 'package_name')$util.passthrough($self, 'userID', 'tagID', 'prefix', 'inherited')">Name</a> $util.sortImage($self, 'package_name')</th>
+      <th><a href="packages?order=$util.toggleOrder($self, 'pm_name')$util.passthrough($self, 'userID', 'tagID', 'prefix', 'inherited')">PackageManager</a> $util.sortImage($self, 'pm_name')</th>
       #if $tag or $user
         <th><a href="packages?order=$util.toggleOrder($self, 'tag_name')$util.passthrough($self, 'userID', 'tagID', 'prefix', 'inherited')">Tag</a> $util.sortImage($self, 'tag_name')</th>
         <th><a href="packages?order=$util.toggleOrder($self, 'owner_name')$util.passthrough($self, 'userID', 'tagID', 'prefix', 'inherited')">Owner</a> $util.sortImage($self, 'owner_name')</th>
@@ -76,6 +77,7 @@
         <tr class="$util.rowToggle($self)">
           <td>$package.package_id</td>
           <td><a href="packageinfo?packageID=$package.package_id">$package.package_name</a></td>
+          <td>$package.pm_name</td>
           #if $tag or $user
           <td><a href="taginfo?tagID=$package.tag_id">$package.tag_name</a></td>
           <td><a href="userinfo?userID=$package.owner_id">$package.owner_name</a></td>
