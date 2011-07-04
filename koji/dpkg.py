@@ -49,7 +49,7 @@ class PkgInfo(object):
 class DscInfo(PkgInfo):
     compressions = r"(gz|bz2)"
     pkg_re = re.compile(r'\bSource:\s*(?P<pkg>.+)\s*\n')
-    buildarchs_re = re.compile(r'\b:Architecture\s*(?P<buildarchs>.+)\s*\n')
+    buildarchs_re = re.compile(r'\bArchitecture:\s*(?P<buildarchs>.+)\s*\n')
     format_re = re.compile(r'\bFormat:\s*(?P<format>[0-9.]+)\s*\n')
     files_re = re.compile(r'\bFiles:\s*\n(?P<files>(([ ]+[^\n]+\n)+))')
     version_re = re.compile(r'\bVersion:\s*((?P<epoch>\d+)\:)?(?P<version>[%s]+)\s*\n' % debian_version_chars)
@@ -61,8 +61,8 @@ class DscInfo(PkgInfo):
         ret['type'] = "dsc"
         ret['size'] = os.path.getsize(self.path)
         ret['buildtime'] = int(os.stat(self.path).st_ctime)
-        ret['exclusivearch'] = None
-        ret['excludearch'] = None
+        ret['exclusivearch'] = ''
+        ret['excludearch'] = ''
 
         f = file(self.path)
         content = f.read()

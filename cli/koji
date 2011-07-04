@@ -853,6 +853,7 @@ def handle_build(options, session, args):
         else:
             callback = _progress_callback
         for f in info['files']:
+            print "Uploading file: %s" % f['path']
             session.uploadWrapper(f['path'], serverdir, callback=callback)
         print
         source = "%s/%s" % (serverdir, os.path.basename(source))
