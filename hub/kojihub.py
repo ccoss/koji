@@ -4267,7 +4267,7 @@ def check_noarch_pkgs(basepath, pkgs):
     """
     result = []
     noarch_rpms = {}
-    for relpath in rpms:
+    for relpath in pkgs:
         if relpath.endswith('.noarch.rpm'):
             filename = os.path.basename(relpath)
             if noarch_rpms.has_key(filename):
@@ -4385,7 +4385,7 @@ def import_build_pkgs(spkg, pkgs, brmap=None, task_id=None, build_id=None, logs=
                               task_id=task_id, build_id=build_id, build=None, logs=logs)
     uploadpath = koji.pathinfo.work()
     #verify files exist
-    for relpath in [main_spkg] + pkgs:
+    for relpath in spkg + pkgs:
         fn = "%s/%s" % (uploadpath,relpath)
         if not os.path.exists(fn):
             raise koji.GenericError, "no such file: %s" % fn
@@ -4405,7 +4405,7 @@ def import_build_pkgs(spkg, pkgs, brmap=None, task_id=None, build_id=None, logs=
     fn = "%s/%s" % (uploadpath,main_spkg)
     #build = koji.get_header_fields(fn,('name','version','release','epoch',
     #                                    'sourcepackage'))
-    build = koji.createPkgInfo(fn).getinfo()
+    build = koji.createPkgInfo(fn).getInfo()
 
     if build['sourcepackage'] != 1:
         raise koji.GenericError, "not a source package: %s" % fn
@@ -6033,7 +6033,7 @@ def build_notification(task_id, build_id):
 
     recipients = get_notification_recipients(build, dest_tag, build['state'])
     if len(recipients) > 0:
-        make_task('buildNotification', [recipients, build, target, web_url])
+        make_task('::buildNotification', [recipients, build, target, web_url])
 
 def get_build_notifications(user_id):
     fields = ('id', 'user_id', 'package_id', 'tag_id', 'success_only', 'email')
@@ -9772,12 +9772,12 @@ class HostExports(object):
         task.assertHost(host.id)
         uploadpath = koji.pathinfo.work()
         #verify files exist
-        for relpath in [srpm] + rpms:
+        for relpath in srpm + rpms:
             fn = "%s/%s" % (uploadpath,relpath)
             if not os.path.exists(fn):
                 raise koji.GenericError, "no such file: %s" % fn
 
-        rpms = check_noarch_rpms(uploadpath, rpms)
+        rpms = check_noarch_pkgs(uploadpath, rpms)
 
         #figure out storage location
         #  <scratchdir>/<username>/task_<id>
@@ -9785,7 +9785,7 @@ class HostExports(object):
         username = get_user(task.getOwner())['name']
         dir = "%s/%s/task_%s" % (scratchdir, username, task_id)
         koji.ensuredir(dir)
-        for relpath in [srpm] + rpms:
+        for relpath in srpm + rpms:
             fn = "%s/%s" % (uploadpath,relpath)
             dest = "%s/%s" % (dir,os.path.basename(fn))
             os.rename(fn,dest)
