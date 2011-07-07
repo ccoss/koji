@@ -226,6 +226,8 @@ class DpkgBuildRoot(BuildRoot):
 
         cmd.extend(args)
         self.logger.info(' '.join(cmd))
+        workdir = getattr(self, 'workdir', None)
+        mocklog = 'mock_output.log'
 
         pid = os.fork()
         if pid:
@@ -292,15 +294,15 @@ class DpkgBuildRoot(BuildRoot):
                     os.dup2(fd, 2)
                 if os.getuid() == 0 and hasattr(self.options,"mockuser"):
                     self.logger.info('Running mock as %s' % self.options.mockuser)
-                    uid,gid = pwd.getpwnam(self.options.mockuser)[2:4]
-                    os.setgroups([grp.getgrnam('mock')[2]])
-                    os.setregid(gid,gid)
-                    os.setreuid(uid,uid)
+                    #uid,gid = pwd.getpwnam(self.options.mockuser)[2:4]
+                    #os.setgroups([grp.getgrnam('mock')[2]])
+                    #os.setregid(gid,gid)
+                    #os.setreuid(uid,uid)
                 os.execvp(cmd[0],cmd)
             except:
                 #diediedie
-                print "Failed to exec mock"
-                print ''.join(traceback.format_exception(*sys.exc_info()))
+                self.logger.error( "Failed to exec mock" )
+                self.logger.error( ''.join(traceback.format_exception(*sys.exc_info())) )
                 os._exit(1)
 
 
@@ -324,11 +326,13 @@ class DpkgBuildRoot(BuildRoot):
 
     def build(self,spkg,arch=None):
         self.session.host.setBuildRootState(self.id,'BUILDING')
+        koji.ensuredir(self.rootdir())
+        koji.ensuredir(self.resultdir())
         # init buildroot
         #pbuilder modifications:1.no apt-cache backup 2.components could be null 3 do not copy source to result dir 
-        args = ["--no-targz","--buildplace", self.rootdir(), "--mirror", packagedir, "--distribution", repodir]
+        args = ["--no-targz","--buildplace", self.rootdir(), "--mirror", "http://172.16.24.22/main" , "--distribution", "repos/%s/%s/%s/repodata/" % ( self.tag_name, self.repoid, arch ),"--aptconfdir", "%s/repos/%s/%s/%s/repodata/" % ( koji.pathinfo.topdir, self.tag_name, self.repoid, arch ) ]
 
-        extargs = [ "--create", "--logfile", "%s/root.log"%self.resultdir()]
+        extargs = [ "--create", "--logfile", "%s/root.log"%self.resultdir(), "--debootstrapscript" ,"/usr/share/kojid/koji" ]
         extargs.extend(args)
         cmd = ["/usr/sbin/pbuilder"]
         rv = self._build(cmd,extargs)
@@ -342,9 +346,11 @@ class DpkgBuildRoot(BuildRoot):
         else:
             debbuildopts="-B"
 
+        cmd = ["/usr/sbin/pbuilder"]
         extargs = ["--build", "--buildresult", self.resultdir(), "--debbuildopts", debbuildopts, "--logfile", "%s/build.log"%self.resultdir()]
         extargs.extend(args)
-        extargs.appned(spkg)
+        f = getMainSpkg(spkg)
+        extargs.append(f)
         rv = self._build(cmd,extargs)
         if rv:
             self.expire()
@@ -1086,7 +1092,7 @@ class BuildTask(BaseTaskHandler):
         built_spkg = None
         for (arch, task_id) in subtasks.iteritems():
             result = results[task_id]
-            self.logger.debug("DEBUG: %r : %r " % (arch,result,))
+            self.logger.debug("DEBUG: %r : %r ----%r" % (arch,result,spkg))
             brootid = result['brootid']
             for fn in result['pkgs']:
                 pkgs.append(fn)
@@ -1097,8 +1103,9 @@ class BuildTask(BaseTaskHandler):
                 if built_spkg:
                     raise koji.BuildError, "multiple builds returned a srpm.  task %i" % self.id
                 else:
-                    built_spkg = result['spkgs'][0]
-                    brmap[result['spkgs'][0]] = brootid
+                    built_spkg = result['spkgs']
+                    for f in result['spkgs']:
+                        brmap[f] = brootid
         if built_spkg:
             spkg = built_spkg
         else:
@@ -1239,10 +1246,11 @@ class BuildArchTask(BaseTaskHandler):
             #    raise koji.BuildError, "mulitple spkg files found for task %i: %s" % (self.id, self.spkg_files)
 
             # Run sanity checks.  Any failures will throw a BuildError
-            self.spkg_sanity_checks("%s/%s" % (resultdir,self.spkg_files[0]))
+            self.spkg_sanity_checks("%s/%s" % (resultdir,getMainSpkg(self.spkg_files)))
 
-            self.logger.debug("uploading %s/%s to %s" % (resultdir,self.spkg_files[0], uploadpath))
-            self.uploadFile("%s/%s" % (resultdir,self.spkg_files[0]))
+            for f in self.spkg_files:
+                self.logger.debug("uploading %s/%s to %s" % (resultdir,f, uploadpath))
+                self.uploadFile("%s/%s" % (resultdir,f))
         if self.pkg_files:
             ret['pkgs'] = [ "%s/%s" % (uploadpath,f) for f in self.pkg_files ]
         else:
@@ -1307,15 +1315,16 @@ class DpkgBuildArchTask(BuildArchTask):
             if f[-4:] == ".log":
                 self.log_files.append(f)
             elif f[-4:] == ".dsc":
-                fl = koji.createPkgInfo(f).getInfo()['files']
+                fl = koji.createPkgInfo("%s/%s"%(resultdir,f)).getInfo()['files']
                 for l in fl :
-                    self.spkg_files.append(l['path'])
+                    self.spkg_files.append(os.path.basename(l['path']))
             elif f[-4:] == ".deb":
                 self.pkg_files.append(f)
             else:
                 self.unexpected.append(f)
             for s in self.spkg_files:
-                self.unexpected.remove(s)
+                if s in self.unexpected :
+                    self.unexpected.remove(s)
        
     def createBuildRoot(self, session, options, *args, **kwargs):
         return DpkgBuildRoot(session, options, *args, **kwargs)
@@ -2623,8 +2632,8 @@ Status: %(status)s\r
 
         return 'sent notification of tag operation %i to: %s' % (self.id, to_addrs)
 
-class RpmBuildNotificationTask(BaseTaskHandler):
-    Methods = ['rpm::buildNotification']
+class BuildNotificationTask(BaseTaskHandler):
+    Methods = ['::buildNotification']
 
     _taskWeight = 0.1
 
@@ -3024,9 +3033,11 @@ class DpkgCreaterepoTask(BaseTaskHandler):
         return [uploadpath, files]
 
     def create_local_repo(self, rinfo, arch, pkglist, groupdata, oldrepo):
+        koji.ensuredir(self.workdir)
         koji.ensuredir(self.outdir)
         koji.ensuredir(self.datadir)
-        cmd = ["cd %s && /usr/bin/dpkg-scanpackages"%self.pathinfo.topdir, '-a', arch, 'packages/dpkg', '| gzip -9c >', "%s/Packages.gz"%self.datadir ]
+        #os.chdir(self.pathinfo.topdir)
+        cmd = ["/usr/bin/koji-scanpackages", '-a', arch, 'packages/dpkg', '/dev/null', "%s/Packages.gz"%self.datadir, self.pathinfo.topdir ]
         #for test
         #testcmd = ['touch',"%s/Package.gz"%self.datadir]
         #self.logger.warn("----------%s" % " ".join(cmd))        
@@ -3039,7 +3050,7 @@ class DpkgCreaterepoTask(BaseTaskHandler):
                     % parseStatus(status, ' '.join(cmd))
 
         slist="""
-deb file://%s repo/%s/%s/%s/repodata \n
+deb file://%s repos/%s/%s/%s/repodata/ \n
 """%(self.pathinfo.topdir,rinfo['tag_name'],rinfo['id'],arch) 
         #self.logger.warn("==========%s" % slist)        
         
