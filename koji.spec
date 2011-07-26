@@ -22,6 +22,7 @@ Requires: python-krbV >= 1.0.13
 Requires: rpm-python
 Requires: pyOpenSSL
 Requires: python-urlgrabber
+Requires: python-debian
 BuildRequires: python
 
 %description
