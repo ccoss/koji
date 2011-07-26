@@ -2497,7 +2497,7 @@ def anon_handle_list_untagged(options, session, args):
             x['path'] = pathinfo.build(x)
         fmt = "%(path)s"
     else:
-        fmt = "%(name)s-%(version)s-%(release)s"
+        fmt = "%(name)s_%(version)s-%(release)s"
     if options.show_references:
         fmt = fmt + "  %(refs)s"
 

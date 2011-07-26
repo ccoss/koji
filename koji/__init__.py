@@ -2249,11 +2249,12 @@ class RpmInfo(PkgInfo):
     def getInfo(self):
         fields = ('name','version','release','epoch','arch','sigmd5','sourcepackage','sourcerpm','buildtime','buildarchs','exclusivearch','excludearch')
         ret = get_header_fields(self.path, fields)
-        p2 = ret['sourcerpm'].rfind('-', 0)
-        p1 = ret['sourcerpm'].rfind('-', 0, p2)
-        replace = ret['sourcerpm'][:p1] + '_'
-        ret['sourceNVRA'] = ret['sourcerpm'].replace(ret['sourcerpm'][:p1+1],replace,1)
-        #print "sourceNVRA %s"%ret['sourceNVRA']
+        if not ret['sourcepackage']:
+            p2 = ret['sourcerpm'].rfind('-', 0)
+            p1 = ret['sourcerpm'].rfind('-', 0, p2)
+            replace = ret['sourcerpm'][:p1] + '_'
+            ret['sourceNVRA'] = ret['sourcerpm'].replace(ret['sourcerpm'][:p1+1],replace,1)
+            #print "sourceNVRA %s"%ret['sourceNVRA']
         ret['type'] = "rpm"
         if ret['sourcepackage']:
             ret['arch'] = 'src'
