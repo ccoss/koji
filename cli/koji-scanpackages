@@ -1,0 +1,2 @@
+#!/bin/bash
+cd $6 && /usr/bin/dpkg-scanpackages $1 $2 $3 $4 | gzip -9c > $5
