@@ -1037,7 +1037,7 @@ class BuildTask(BaseTaskHandler):
         buildarchs = data['buildarchs']
         exclusivearch = data['exclusivearch']
         excludearch = data['excludearch']
-        if buildarchs and buildarchs not in 'any':
+        if buildarchs and 'any' not in buildarchs:
             archlist = buildarchs
             self.logger.debug('archlist after buildarchs: %r' % archlist)
         if exclusivearch:
