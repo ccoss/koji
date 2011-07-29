@@ -4534,6 +4534,18 @@ def import_rpm(fn,buildinfo=None,brootid=None,wrapper=False):
 
     return rpminfo
 
+## gen spkg name from build info 
+def getSpkgName( buildinfo ):
+    spkgname=''
+    if buildinfo['type'] == "rpm":
+        spkgname = "%(name)s-%(version)s-%(release)s.src.rpm" % buildinfo
+    else if buildinfo['type'] == "dsc":
+        if buildinfo['release'] != "debiannative":
+            spkgname = "%(name)s_%(version)s-%(release)s.dsc" % buildinfo
+        else
+            spkgname = "%(name)s_%(version)s.dsc" % buildinfo
+    return spkgname
+
 def import_pkg(fn,buildinfo=None,brootid=None,wrapper=False):
     """Import a single rpm into the database
 
@@ -4583,7 +4595,8 @@ def import_pkg(fn,buildinfo=None,brootid=None,wrapper=False):
                 raise koji.GenericError, "Build is %s: %s" % (state, nvr)
     elif not wrapper:
         # only enforce the srpm name matching the build for non-wrapper rpms
-        spkgname = "%(name)s-%(version)s-%(release)s.src.rpm" % buildinfo
+        #spkgname = "%(name)s-%(version)s-%(release)s.src.rpm" % buildinfo
+        spkgname = getSpkgName( buildinfo )
         #either the sourcerpm field should match the build, or the filename
         #itself (for the srpm)
         if pkginfo['sourcepackage'] != 1:

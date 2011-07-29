@@ -330,7 +330,7 @@ class DpkgBuildRoot(BuildRoot):
         koji.ensuredir(self.resultdir())
         # init buildroot
         #pbuilder modifications:1.no apt-cache backup 2.components could be null 3 do not copy source to result dir 
-        args = ["--no-targz","--buildplace", self.rootdir(), "--mirror", self.options.topurl , "--distribution", "repos/%s/%s/%s/repodata/" % ( self.tag_name, self.repoid, arch ),"--aptconfdir", "%s/repos/%s/%s/%s/repodata/" % ( koji.pathinfo.topdir, self.tag_name, self.repoid, arch ) ]
+        args = ["--no-targz","--buildplace", self.rootdir(), "--mirror", self.options.mainurl , "--distribution", "repos/%s/%s/%s/repodata/" % ( self.tag_name, self.repoid, arch ),"--aptconfdir", "%s/repos/%s/%s/%s/repodata/" % ( koji.pathinfo.topdir, self.tag_name, self.repoid, arch ) ]
 
         extargs = [ "--create", "--logfile", "%s/root.log"%self.resultdir(), "--debootstrapscript" ,"/usr/share/kojid/koji" ]
         extargs.extend(args)
@@ -3051,7 +3051,7 @@ class DpkgCreaterepoTask(BaseTaskHandler):
 
         slist="""
 deb %s repos/%s/%s/%s/repodata/ \n
-"""%(self.options.topurl, rinfo['tag_name'], rinfo['id'], arch) 
+"""%(self.options.mainurl, rinfo['tag_name'], rinfo['id'], arch) 
         #self.logger.warn("==========%s" % slist)        
         
         sourceslist = file("%s/sources.list" % self.datadir, 'a')
@@ -3230,7 +3230,7 @@ def get_options():
                 'createrepo_skip_stat': True,
                 'createrepo_update': True,
                 'pkgurl': None,
-                'topurl': None,
+                'mainurl': None,
                 'allowed_scms': '',
                 'cert': '/etc/kojid/client.crt',
                 'ca': '/etc/kojid/clientca.crt',
