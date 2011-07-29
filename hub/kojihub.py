@@ -4600,9 +4600,11 @@ def import_pkg(fn,buildinfo=None,brootid=None,wrapper=False):
         #either the sourcerpm field should match the build, or the filename
         #itself (for the srpm)
         if pkginfo['sourcepackage'] != 1:
-            if pkginfo['sourceNVRA'] != spkgname:
-                raise koji.GenericError, "spkg mismatch for %s: %s (expected %s)" \
-                        % (fn,pkginfo['sourceNVRA'],spkgname)
+            #to fix
+            pass
+            #if pkginfo['sourceNVRA'] != spkgname:
+            #    raise koji.GenericError, "spkg mismatch for %s: %s (expected %s)" \
+            #            % (fn,pkginfo['sourceNVRA'],spkgname)
         elif basename != spkgname:
             raise koji.GenericError, "srpm mismatch for %s: %s (expected %s)" \
                     % (fn,basename,spkgname)
