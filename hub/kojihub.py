@@ -4539,10 +4539,10 @@ def getSpkgName( buildinfo ):
     spkgname=''
     if buildinfo['type'] == "rpm":
         spkgname = "%(name)s-%(version)s-%(release)s.src.rpm" % buildinfo
-    else if buildinfo['type'] == "dsc":
+    elif buildinfo['type'] == "dsc":
         if buildinfo['release'] != "debiannative":
             spkgname = "%(name)s_%(version)s-%(release)s.dsc" % buildinfo
-        else
+        else:
             spkgname = "%(name)s_%(version)s.dsc" % buildinfo
     return spkgname
 
