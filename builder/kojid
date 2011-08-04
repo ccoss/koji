@@ -952,6 +952,7 @@ class BuildTask(BaseTaskHandler):
                         % (data['name'], target_info['dest_tag_name'])
             # TODO - more pre tests
         archlist = self.getArchList(build_tag, data, extra=extra_arches)
+        data.pop('sigmd5',0)
         #let the system know about the build we're attempting
         if not self.opts.get('scratch'):
             #scratch builds do not get imported

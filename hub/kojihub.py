@@ -9904,6 +9904,7 @@ class HostExports(object):
         task.assertHost(host.id)
         result = import_build_pkgs(srpm, rpms, brmap, task_id, build_id, logs=logs)
         build_notification(task_id, build_id)
+        result.pop('sigmd5',0)
         return result
 
     def initMavenBuild(self, task_id, build_info, maven_info):
