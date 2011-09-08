@@ -1,8 +1,17 @@
 import os
 import re
 
-from debian import debfile
-from debian import deb822
+try:
+    from debian import debfile
+    from debian import deb822
+except ImportError:
+    try:
+        from debian_bundle import debfile
+        from debian_bundle import deb822
+    except ImportError:
+        sys.stderr.write("cant load debian module")
+        sys.stderr.flush()
+        sys.exit(1)
 
 debian_version_chars = 'a-zA-Z\d.~+-'
 version_re = re.compile(r'\bVersion:\s*((?P<epoch>\d+)\:)?(?P<version>[%s]+)\s*\n' % debian_version_chars)
