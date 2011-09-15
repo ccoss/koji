@@ -1078,7 +1078,7 @@ def readTaggedBuilds(tag,event=None,inherit=False,latest=False,package=None,owne
               ('package.id', 'package_id'), ('package.name', 'package_name'),
               ('package.name', 'name'),
               ('package.pm_name', 'pm_name'),
-              ("package.name || '-' || build.version || '-' || build.release", 'nvr'),
+              ("package.name || '_' || build.version || '-' || build.release", 'nvr'),
               ('users.id', 'owner_id'), ('users.name', 'owner_name')]
     st_complete = koji.BUILD_STATES['COMPLETE']
 
@@ -1458,7 +1458,7 @@ def _tag_build(tag,build,user_id=None,force=False):
     koji.plugin.run_callbacks('preTag', tag=tag, build=build, user=user, force=force)
     tag_id = tag['id']
     build_id = build['id']
-    nvr = "%(name)s-%(version)s-%(release)s" % build
+    nvr = "%(name)s_%(version)s-%(release)s" % build
     if build['state'] != koji.BUILD_STATES['COMPLETE']:
         # incomplete builds may not be tagged, not even when forced
         state = koji.BUILD_STATES[build['state']]
@@ -1516,7 +1516,7 @@ def _untag_build(tag,build,user_id=None,strict=True,force=False):
     update.make_revoke(user_id=user_id)
     count = update.execute()
     if count == 0 and strict:
-        nvr = "%(name)s-%(version)s-%(release)s" % build
+        nvr = "%(name)s_%(version)s-%(release)s" % build
         raise koji.TagError, "build %s not in tag %s" % (nvr,tag['name'])
     koji.plugin.run_callbacks('postUntag', tag=tag, build=build, user=user, force=force, strict=strict)
 
@@ -3174,7 +3174,7 @@ def get_build(buildInfo, strict=False):
               ('build.epoch', 'epoch'), ('build.state', 'state'), ('build.completion_time', 'completion_time'),
               ('build.task_id', 'task_id'), ('events.id', 'creation_event_id'), ('events.time', 'creation_time'),
               ('package.id', 'package_id'), ('package.name', 'package_name'), ('package.name', 'name'),('package.pm_name','pm_name'),
-              ("package.name || '-' || build.version || '-' || build.release", 'nvr'),
+              ("package.name || '_' || build.version || '-' || build.release", 'nvr'),
               ('EXTRACT(EPOCH FROM events.time)','creation_ts'),
               ('EXTRACT(EPOCH FROM build.completion_time)','completion_ts'),
               ('users.id', 'owner_id'), ('users.name', 'owner_name'))
@@ -3495,7 +3495,7 @@ def list_pkgs(buildID=None, buildrootID=None, imageID=None, componentBuildrootID
     an empty list is returned."""
     fields = [('pkginfo.id', 'id'), ('pkginfo.name', 'name'), ('pkginfo.version', 'version'),
               ('pkginfo.release', 'release'),
-              ("pkginfo.name || '-' || pkginfo.version || '-' || pkginfo.release", 'nvr'),
+              ("pkginfo.name || '_' || pkginfo.version || '-' || pkginfo.release", 'nvr'),
               ('pkginfo.arch', 'arch'),
               ('pkginfo.epoch', 'epoch'), ('pkginfo.payloadhash', 'payloadhash'),
               ('pkginfo.size', 'size'), ('pkginfo.buildtime', 'buildtime'),
@@ -4591,7 +4591,7 @@ def import_pkg(fn,buildinfo=None,brootid=None,wrapper=False):
                 raise koji.GenericError, 'No matching build'
             state = koji.BUILD_STATES[buildinfo['state']]
             if state in ('FAILED', 'CANCELED', 'DELETED'):
-                nvr = "%(name)s-%(version)s-%(release)s" % buildinfo
+                nvr = "%(name)s_%(version)s-%(release)s" % buildinfo
                 raise koji.GenericError, "Build is %s: %s" % (state, nvr)
     elif not wrapper:
         # only enforce the srpm name matching the build for non-wrapper rpms
@@ -5161,7 +5161,7 @@ def add_pkg_sig(an_pkg, sighdr):
             sigmd5, sigkey = _scan_sighdr(sighdr, rpm_path)
             sigmd5 = koji.hex_string(sigmd5)
             if sigmd5 != rinfo['payloadhash']:
-                nvra = "%(name)s-%(version)s-%(release)s.%(arch)s" % rinfo
+                nvra = "%(name)s_%(version)s-%(release)s.%(arch)s" % rinfo
                 raise koji.GenericError, "wrong md5 for %s: %s" % (nvra, sigmd5)
         if not sigkey:
             sigkey = ''
@@ -5175,7 +5175,7 @@ def add_pkg_sig(an_pkg, sighdr):
     rows = _fetchMulti(q, locals())
     if rows:
         #TODO[?] - if sighash is the same, handle more gracefully
-        nvra = "%(name)s-%(version)s-%(release)s.%(arch)s" % rinfo
+        nvra = "%(name)s_%(version)s-%(release)s.%(arch)s" % rinfo
         raise koji.GenericError, "Signature already exists for package %s, key %s" % (nvra, sigkey)
     insert = """INSERT INTO pkgsigs(pkg_id, sigkey, sighash)
     VALUES (%(pkg_id)s, %(sigkey)s, %(sighash)s)"""
@@ -8033,7 +8033,7 @@ class RootExports(object):
                   ('EXTRACT(EPOCH FROM events.time)','creation_ts'),
                   ('EXTRACT(EPOCH FROM build.completion_time)','completion_ts'),
                   ('package.id', 'package_id'), ('package.name', 'package_name'), ('package.name', 'name'),
-                  ("package.name || '-' || build.version || '-' || build.release", 'nvr'),
+                  ("package.name || '_' || build.version || '-' || build.release", 'nvr'),
                   ('users.id', 'owner_id'), ('users.name', 'owner_name')]
 
         tables = ['build']
