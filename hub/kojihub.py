@@ -2801,7 +2801,7 @@ def edit_tag(tagInfo, **kwargs):
     update.make_revoke()
     update.execute()
 
-    insert = InsertProcessor('tag_config', data=dslice(data, ('arches', 'perm_id', 'locked')))
+    insert = InsertProcessor('tag_config', data=dslice(data, ('arches', 'perm_id', 'locked','pm_name')))
     insert.set(tag_id=data['id'])
     insert.set(**dslice(data, ('maven_support', 'maven_include_all')))
     insert.make_create()
