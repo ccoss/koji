@@ -1461,9 +1461,24 @@ class PathInfo(object):
         """Return the path (relative to build_dir) where an rpm belongs"""
         return "%(arch)s/%(name)s-%(version)s-%(release)s.%(arch)s.rpm" % rpminfo
 
-    def pkg(self,rpminfo):
+    def pkg(self,pkginfo):
         """Return the path (relative to build_dir) where an rpm belongs"""
-        return "%(arch)s/%(name)s-%(version)s-%(release)s.%(arch)s.rpm" % rpminfo
+        path = ''
+        pm = pkginfo['pm_name']
+        if pm == "rpm":
+            path = "%(arch)s/%(name)s-%(version)s-%(release)s.%(arch)s.rpm" % pkginfo
+        if pm == "dpkg":
+            if "src" == pkginfo['arch']:
+                if "debiannative" == pkginfo['release']:
+                    path = "%(arch)s/%(name)s_%(version)s.dsc" % pkginfo
+                else:
+                    path = "%(arch)s/%(name)s_%(version)s-%(release)s.dsc" % pkginfo
+            else:
+                if "debiannative" == pkginfo['release']:
+                    path = "%(arch)s/%(name)s_%(version)s_%(arch)s.deb" % pkginfo
+                else:
+                    path = "%(arch)s/%(name)s_%(version)s-%(release)s_%(arch)s.deb" % pkginfo
+        return path
 
     def signed(self, rpminfo, sigkey):
         """Return the path (relative to build dir) where a signed rpm lives"""

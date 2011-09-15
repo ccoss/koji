@@ -5416,21 +5416,24 @@ def anon_handle_download_build(options, session, args):
         arches = suboptions.arches
         if len(arches) == 0:
             arches = None
-        rpms = session.listRPMs(buildID=info['id'], arches=arches)
-        if not rpms:
+        #rpms = session.listRPMs(buildID=info['id'], arches=arches)
+        pkgs = session.listPKGs(buildID=info['id'], arches=arches)
+        if not pkgs:
             if arches:
                 print "No %s packages available for %s" % (" or ".join(arches), koji.buildLabel(info))
             else:
                 print "No packages available for %s" % koji.buildLabel(info)
             return 1
-        for rpm in rpms:
-            if not suboptions.debuginfo and koji.is_debuginfo(rpm['name']):
+        for pkg in pkgs:
+            if not suboptions.debuginfo and koji.is_debuginfo(pkg['name']):
                 continue
             if suboptions.key:
-                fname = koji.pathinfo.signed(rpm, suboptions.key)
+                fname = koji.pathinfo.signed(pkg, suboptions.key)
             else:
-                fname = koji.pathinfo.rpm(rpm)
-            url = '%s/%s/%s/%s/%s' % (options.pkgurl, info['name'], info['version'], info['release'],
+                #fname = koji.pathinfo.rpm(pkg)
+                pkg['pm_name'] = info['pm_name']
+                fname = koji.pathinfo.pkg(pkg)
+            url = '%s/%s/%s/%s/%s/%s' % (options.pkgurl, info['pm_name'], info['name'], info['version'], info['release'],
                                       fname)
             urls.append((url, os.path.basename(fname)))
 
@@ -5440,20 +5443,34 @@ def anon_handle_download_build(options, session, args):
         pg = progress.TextMeter()
     
     for url, relpath in urls:
-        file = grabber.urlopen(url, progress_obj=pg, text=relpath)
+        def download(url, relpath): 
+            file = grabber.urlopen(url, progress_obj=pg, text=relpath)
 
-        if '/' in relpath:
-            koji.ensuredir(os.path.dirname(relpath))
-        out = os.open(relpath, os.O_WRONLY|os.O_CREAT|os.O_TRUNC, 0666)
-        try:
-            while 1:
-                buf = file.read(4096)
-                if not buf:
-                    break
-                os.write(out, buf)
-        finally:
-            os.close(out)
-            file.close()
+            if '/' in relpath:
+                koji.ensuredir(os.path.dirname(relpath))
+            out = os.open(relpath, os.O_WRONLY|os.O_CREAT|os.O_TRUNC, 0666)
+            try:
+                while 1:
+                    buf = file.read(4096)
+                    if not buf:
+                        break
+                    os.write(out, buf)
+            finally:
+                os.close(out)
+                file.close()
+
+        download(url, relpath)
+        fileinfo = koji.createPkgInfo(relpath).getInfo()
+        if "dsc" == fileinfo['type']:
+            indx = url.rfind('/') + 1
+            urlprefix=url[0:indx]
+            files = fileinfo['files']
+            for f in files:
+                if os.path.basename(relpath) == os.path.basename(f['path']):
+                    continue
+                else:
+                   base = os.path.basename(f['path'])
+                   download( urlprefix + base, os.path.dirname(relpath) + base )
 
 def anon_handle_wait_repo(options, session, args):
     "Wait for a repo to be regenerated"
