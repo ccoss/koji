@@ -1,5 +1,6 @@
 import os
 import re
+import string
 
 try:
     from debian import debfile
@@ -40,7 +41,7 @@ class PkgInfo(object):
     def __init__(self, path):
         self.path = os.path.abspath(path)
 
-    def getInfo(self):
+    def getInfo(self,fields):
         """(abstract) get the info from package file
            result: ret['type']
                    ret['sourceNVRA']
@@ -63,7 +64,7 @@ class DscInfo(PkgInfo):
     files_re = re.compile(r'\bFiles:\s*\n(?P<files>(([ ]+[^\n]+\n)+))')
     version_re = re.compile(r'\bVersion:\s*((?P<epoch>\d+)\:)?(?P<version>[%s]+)\s*\n' % debian_version_chars)
 
-    def getInfo(self):
+    def getInfo(self,fields):
         ret={}
         ret['sourcepackage'] = 1
         ret['arch'] = 'src'
@@ -114,13 +115,20 @@ class DscInfo(PkgInfo):
                     ret['files'].append(fileinfo)
 
         f.close()
+
+        ret['summary'] = ''
+        ret['description'] = ''
+
+        fret = {}
+        for k in fields:
+            fret[k] = ret[k]
         return ret
 
 class DebInfo(PkgInfo):
 
     version_re = re.compile(r'((?P<epoch>\d+)\:)?(?P<version>[%s]+)\s*$' % debian_version_chars)
 
-    def getInfo(self):
+    def getInfo(self,fields):
         ret={}
         ret['sourcepackage'] = 0
         ret['type'] = "deb"
@@ -187,7 +195,15 @@ class DebInfo(PkgInfo):
         fileinfo['path']=self.path
 
         ret['files'] = [fileinfo]
-        return ret
+
+        lines=info['description'].split('\n')
+        ret['summary'] = lines[0]
+        ret['description'] = string.join(map(lambda l: ' ' + l, lines[1:]), '\n')
+
+        fret={}
+        for k in fields:
+            fret[k] = ret[k]
+        return fret
 
 
 

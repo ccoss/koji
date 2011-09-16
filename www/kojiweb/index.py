@@ -1034,8 +1034,8 @@ def buildinfo(req, buildID):
 
     tags = server.listTags(build['id'])
     tags.sort(_sortbyname)
-    rpms = server.listBuildRPMs(build['id'])
-    rpms.sort(_sortbyname)
+    pkgs = server.listBuildPKGs(build['id'])
+    pkgs.sort(_sortbyname)
     mavenbuild = server.getMavenBuild(buildID)
     winbuild = server.getWinBuild(buildID)
     if mavenbuild:
@@ -1049,17 +1049,18 @@ def buildinfo(req, buildID):
     for archive in archives:
         archivesByExt.setdefault(os.path.splitext(archive['filename'])[1][1:], []).append(archive)
 
-    rpmsByArch = {}
+    pkgsByArch = {}
     debuginfoByArch = {}
-    for rpm in rpms:
-        if koji.is_debuginfo(rpm['name']):
-            debuginfoByArch.setdefault(rpm['arch'], []).append(rpm)
+    for pkg in pkgs:
+        if koji.is_debuginfo(pkg['name']):
+            debuginfoByArch.setdefault(pkg['arch'], []).append(pkg)
         else:
-            rpmsByArch.setdefault(rpm['arch'], []).append(rpm)
+            pkgsByArch.setdefault(pkg['arch'], []).append(pkg)
 
-    if rpmsByArch.has_key('src'):
-        srpm = rpmsByArch['src'][0]
-        headers = server.getRPMHeaders(srpm['id'], headers=['summary', 'description'])
+    if pkgsByArch.has_key('src'):
+        spkg = pkgsByArch['src'][0]
+        headers = server.getPKGHeaders(spkg['id'], headers=['summary', 'description'])
+        values['srcfiles'] = server.getSPKGFiles(spkg['id'])
         values['summary'] = koji.fixEncoding(headers.get('summary'))
         values['description'] = koji.fixEncoding(headers.get('description'))
         values['changelog'] = server.getChangelogEntries(build['id'])
@@ -1067,8 +1068,8 @@ def buildinfo(req, buildID):
     noarch_log_dest = 'noarch'
     if build['task_id']:
         task = server.getTaskInfo(build['task_id'], request=True)
-        if rpmsByArch.has_key('noarch') and \
-                [a for a in rpmsByArch.keys() if a not in ('noarch', 'src')]:
+        if pkgsByArch.has_key('noarch') and \
+                [a for a in pkgsByArch.keys() if a not in ('noarch', 'src')]:
             # This build has noarch and other-arch packages, indicating either
             # noarch in extra-arches (kernel) or noarch subpackages.
             # Point the log link to the arch of the buildArch task that the first
@@ -1076,9 +1077,9 @@ def buildinfo(req, buildID):
             # extra-arches case (noarch) and the subpackage case (one of the other
             # arches).  If noarch extra-arches and noarch subpackages are mixed in
             # same build, this will become incorrect.
-            noarch_rpm = rpmsByArch['noarch'][0]
-            if noarch_rpm['buildroot_id']:
-                noarch_buildroot = server.getBuildroot(noarch_rpm['buildroot_id'])
+            noarch_pkg = pkgsByArch['noarch'][0]
+            if noarch_pkg['buildroot_id']:
+                noarch_buildroot = server.getBuildroot(noarch_pkg['buildroot_id'])
                 if noarch_buildroot:
                     noarch_task = server.getTaskInfo(noarch_buildroot['task_id'], request=True)
                     if noarch_task:
@@ -1087,22 +1088,22 @@ def buildinfo(req, buildID):
         # get the summary, description, and changelogs from the built srpm
         # if the build is not yet complete
         if build['state'] != koji.BUILD_STATES['COMPLETE']:
-            srpm_tasks = server.listTasks(opts={'parent': task['id'], 'method': 'buildSRPMFromSCM'})
-            if srpm_tasks:
-                srpm_task = srpm_tasks[0]
-                if srpm_task['state'] == koji.TASK_STATES['CLOSED']:
-                    srpm_path = None
-                    for output in server.listTaskOutput(srpm_task['id']):
-                        if output.endswith('.src.rpm'):
-                            srpm_path = output
+            spkg_tasks = server.listTasks(opts={'parent': task['id'], 'method': 'buildSRPMFromSCM'})
+            if spkg_tasks:
+                spkg_task = spkg_tasks[0]
+                if spkg_task['state'] == koji.TASK_STATES['CLOSED']:
+                    spkg_path = None
+                    for output in server.listTaskOutput(spkg_task['id']):
+                        if output.endswith('.src.rpm') or output.endswith('.dsc'):
+                            spkg_path = output
                             break
-                    if srpm_path:
-                        srpm_headers = server.getRPMHeaders(taskID=srpm_task['id'], filepath=srpm_path,
+                    if spkg_path:
+                        spkg_headers = server.getPKGHeaders(taskID=srpm_task['id'], filepath=spkg_path,
                                                             headers=['summary', 'description'])
-                        if srpm_headers:
-                            values['summary'] = koji.fixEncoding(srpm_headers['summary'])
-                            values['description'] = koji.fixEncoding(srpm_headers['description'])
-                        changelog = server.getChangelogEntries(taskID=srpm_task['id'], filepath=srpm_path)
+                        if spkg_headers:
+                            values['summary'] = koji.fixEncoding(spkg_headers['summary'])
+                            values['description'] = koji.fixEncoding(spkg_headers['description'])
+                        changelog = server.getChangelogEntries(taskID=spkg_task['id'], filepath=spkg_path)
                         if changelog:
                             values['changelog'] = changelog
     else:
@@ -1110,7 +1111,7 @@ def buildinfo(req, buildID):
 
     values['build'] = build
     values['tags'] = tags
-    values['rpmsByArch'] = rpmsByArch
+    values['pkgsByArch'] = pkgsByArch
     values['debuginfoByArch'] = debuginfoByArch
     values['task'] = task
     values['mavenbuild'] = mavenbuild

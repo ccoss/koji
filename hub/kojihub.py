@@ -4405,7 +4405,7 @@ def import_build_pkgs(spkg, pkgs, brmap=None, task_id=None, build_id=None, logs=
     fn = "%s/%s" % (uploadpath,main_spkg)
     #build = koji.get_header_fields(fn,('name','version','release','epoch',
     #                                    'sourcepackage'))
-    build = koji.createPkgInfo(fn).getInfo()
+    build = koji.createPkgInfo(fn).getInfo(('name','version','release','epoch','sourcepackage'))
 
     if build['sourcepackage'] != 1:
         raise koji.GenericError, "not a source package: %s" % fn
@@ -4558,7 +4558,7 @@ def import_pkg(fn,buildinfo=None,brootid=None,wrapper=False):
     #hdr = koji.get_rpm_header(fn)
     #pkginfo = koji.get_header_fields(hdr,['name','version','release','epoch',
     #                'sourcepackage','arch','buildtime','sourceNVRA'])
-    pkginfo = koji.createPkgInfo(fn).getInfo()
+    pkginfo = koji.createPkgInfo(fn).getInfo(('name','version','release','epoch','sourcepackage','arch','buildtime','sourceNVRA'))
     if pkginfo['type'] == "rpm":
         hdr = koji.get_rpm_header(fn)
 
@@ -7831,7 +7831,7 @@ class RootExports(object):
             build_info = get_build(buildID)
             if not build_info:
                 return _applyQueryOpts([], queryOpts)
-            srpms = self.listRPMs(buildID=build_info['id'], arches='src')
+            srpms = self.listPKGs(buildID=build_info['id'], arches='src')
             if not srpms:
                 return _applyQueryOpts([], queryOpts)
             srpm_info = srpms[0]
@@ -7968,6 +7968,14 @@ class RootExports(object):
             #lookup tag id
             tag = get_tag_id(tag,strict=True)
         return readTaggedRPMS(tag,event=event,inherit=inherit,latest=latest,package=package,arch=arch,rpmsigs=rpmsigs,owner=owner,type=type)
+
+    def listTaggedPKGS(self,tag,event=None,inherit=False,latest=False,package=None,arch=None,rpmsigs=False,owner=None,type=None):
+        """List rpms and builds within tag"""
+        if not isinstance(tag,int):
+            #lookup tag id
+            tag = get_tag_id(tag,strict=True)
+        return readTaggedPKGS(tag,event=event,inherit=inherit,latest=latest,package=package,arch=arch,pkgsigs=rpmsigs,owner=owner,type=type)
+
 
     def listTaggedArchives(self, tag, event=None, inherit=False, latest=False, package=None, type=None):
         """List archives and builds within a tag"""
@@ -8392,6 +8400,63 @@ class RootExports(object):
             if isinstance(value, basestring):
                 headers[key] = koji.fixEncoding(value)
         return headers
+
+    def getSPKGFiles(self, pkgID=None):
+        """
+        Get source PKG files
+        """
+        res = []
+        if pkgID:
+            pkg_info = get_pkg(pkgID)
+            if not pkg_info or not pkg_info['build_id']:
+                return res
+            build_info = get_build(pkg_info['build_id'])
+            pkg_info['pm_name'] = build_info['pm_name']
+            pkg_path = os.path.join(koji.pathinfo.build(build_info), koji.pathinfo.pkg(pkg_info))
+            if not os.path.exists(pkg_path):
+                return res
+            files = koji.createPkgInfo(pkg_path).getInfo(('files',))['files']
+            for f in files:
+                res.append(os.path.basename(f['path']))
+            return res
+
+    def getPKGHeaders(self, pkgID=None, taskID=None, filepath=None, headers=None):
+        """
+        Get the requested headers from the rpm.  Header names are case-insensitive.
+        If a header is requested that does not exist an exception will be raised.
+        Returns a map of header names to values.  If the specified ID
+        is not valid or the rpm does not exist on the file system, an empty map
+        will be returned.
+        """
+        if not headers:
+            headers = []
+        if pkgID:
+            pkg_info = get_pkg(pkgID)
+            if not pkg_info or not pkg_info['build_id']:
+                return {}
+            build_info = get_build(pkg_info['build_id'])
+            pkg_info['pm_name'] = build_info['pm_name']
+            pkg_path = os.path.join(koji.pathinfo.build(build_info), koji.pathinfo.pkg(pkg_info))
+            if not os.path.exists(pkg_path):
+                return {}
+        elif taskID:
+            if not filepath:
+                raise koji.GenericError, 'filepath must be specified with taskID'
+            if filepath.startswith('/') or '../' in filepath:
+                raise koji.GenericError, 'invalid filepath: %s' % filepath
+            pkg_path = os.path.join(koji.pathinfo.work(),
+                                    koji.pathinfo.taskrelpath(taskID),
+                                    filepath)
+        else:
+            raise koji.GenericError, 'either pkgID or taskID and filepath must be specified'
+
+        #headers = koji.get_header_fields(rpm_path, headers)
+        headers = koji.createPkgInfo(pkg_path).getInfo(headers)
+        for key, value in headers.items():
+            if isinstance(value, basestring):
+                headers[key] = koji.fixEncoding(value)
+        return headers
+
 
     queryRPMSigs = staticmethod(query_rpm_sigs)
     writeSignedRPM = staticmethod(write_signed_rpm)

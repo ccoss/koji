@@ -1014,7 +1014,7 @@ class BuildTask(BaseTaskHandler):
         relpath = "work/%s" % spkg
         opts = dict([(k, getattr(self.options, k)) for k in 'topurl','topdir'])
         fn = koji.getRemoteFilePath(relpath, **opts)
-        data = koji.createPkgInfo(fn).getInfo()
+        data = koji.createPkgInfo(fn).getInfo(['name','version','release','epoch','buildarchs','exclusivearch','excludearch'])
         #fo.close()
         if data['sourcepackage'] != 1:
             raise koji.BuildError, "%s is not a source package" % spkg
@@ -1167,7 +1167,7 @@ class BuildArchTask(BaseTaskHandler):
 #        fn = self.localPath("work/%s" % spkg)
         if not os.path.exists(fn):
             raise koji.BuildError, "SPKG file missing: %s" % fn
-        data = koji.createPkgInfo(fn).getInfo()
+        data = koji.createPkgInfo(fn).getInfo(('name','sourcepackage'))
         # peel E:N-V-R from package
 #        h = koji.get_rpm_header(fn)
 #        name = h[rpm.RPMTAG_NAME]
@@ -1316,7 +1316,7 @@ class DpkgBuildArchTask(BuildArchTask):
             if f[-4:] == ".log":
                 self.log_files.append(f)
             elif f[-4:] == ".dsc":
-                fl = koji.createPkgInfo("%s/%s"%(resultdir,f)).getInfo()['files']
+                fl = koji.createPkgInfo("%s/%s"%(resultdir,f)).getInfo(('files',))['files']
                 for l in fl :
                     self.spkg_files.append(os.path.basename(l['path']))
             elif f[-4:] == ".deb":

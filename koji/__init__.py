@@ -2261,18 +2261,21 @@ def get_pkg_info(X):
 
     
 class RpmInfo(PkgInfo):
-    def getInfo(self):
-        fields = ('name','version','release','epoch','arch','sigmd5','sourcepackage','sourcerpm','buildtime','buildarchs','exclusivearch','excludearch')
-        ret = get_header_fields(self.path, fields)
-        if not ret['sourcepackage']:
-            p2 = ret['sourcerpm'].rfind('-', 0)
-            p1 = ret['sourcerpm'].rfind('-', 0, p2)
-            replace = ret['sourcerpm'][:p1] + '_'
-            ret['sourceNVRA'] = ret['sourcerpm'].replace(ret['sourcerpm'][:p1+1],replace,1)
-            #print "sourceNVRA %s"%ret['sourceNVRA']
-        ret['type'] = "rpm"
-        if ret['sourcepackage']:
-            ret['arch'] = 'src'
+    def getInfo(self,fields):
+#        fields = ('name','version','release','epoch','arch','sigmd5','sourcepackage','sourcerpm','buildtime','buildarchs','exclusivearch','excludearch')
+        rpmfields = [a for a in fields if  a not in ('files','type')]
+        if len( rpmfields ) == 0:
+            rpmfields = ['name']
+        ret = get_header_fields(self.path, rpmfields)
+        if 'sourcepackage' in fields:
+            if not ret['sourcepackage']:
+                p2 = ret['sourcerpm'].rfind('-', 0)
+                p1 = ret['sourcerpm'].rfind('-', 0, p2)
+                replace = ret['sourcerpm'][:p1] + '_'
+                ret['sourceNVRA'] = ret['sourcerpm'].replace(ret['sourcerpm'][:p1+1],replace,1)
+                #print "sourceNVRA %s"%ret['sourceNVRA']
+            if ret['sourcepackage']:
+                ret['arch'] = 'src'
 
         fileinfo={}
         fileinfo['md5sum']="0"
@@ -2280,7 +2283,12 @@ class RpmInfo(PkgInfo):
         fileinfo['path']=self.path
 
         ret['files'] =[fileinfo]
-        return ret
+        ret['type'] = "rpm"
+
+        finalret = {}
+        for k in fields:
+            finalret[k] = ret[k]
+        return finalret
 
 
 def createPkgInfo(path):

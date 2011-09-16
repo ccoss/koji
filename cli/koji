@@ -841,7 +841,7 @@ def handle_build(options, session, args):
         if not build_opts.quiet:
             print "Uploading spkg: %s" % source
 
-        info = koji.createPkgInfo(source).getInfo()
+        info = koji.createPkgInfo(source).getInfo(('type',))
         pm = session.getPackageManager(info['type'])
         if dest_tag['pm_name'] != pm['name']:
             parser.error(_("Package's manager name is inconsistent with the tag's "))
@@ -1305,7 +1305,7 @@ def handle_import(options, session, args):
 #        data = koji.get_header_fields(path, ('name','version','release','epoch',
 #                                    'arch','sigmd5','sourcepackage','sourcerpm'))
         #data = koji.get_pkg_info(path)
-        data = koji.createPkgInfo(path).getInfo()
+        data = koji.createPkgInfo(path).getInfo(('name','version','release','epoch','arch','sigmd5','sourcepackage','sourceNVRA'))
         res = session.getPackageManager(data['type'])
         data['pmanager'] = res['name']
 
@@ -5460,7 +5460,7 @@ def anon_handle_download_build(options, session, args):
                 file.close()
 
         download(url, relpath)
-        fileinfo = koji.createPkgInfo(relpath).getInfo()
+        fileinfo = koji.createPkgInfo(relpath).getInfo(('type','files'))
         if "dsc" == fileinfo['type']:
             indx = url.rfind('/') + 1
             urlprefix=url[0:indx]
