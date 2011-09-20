@@ -1,6 +1,8 @@
 import os
 import re
 import string
+import logging
+import hashlib
 
 try:
     from debian import debfile
@@ -16,6 +18,16 @@ except ImportError:
 
 debian_version_chars = 'a-zA-Z\d.~+-'
 version_re = re.compile(r'\bVersion:\s*((?P<epoch>\d+)\:)?(?P<version>[%s]+)\s*\n' % debian_version_chars)
+
+logger = logging.getLogger('koji.hub')
+
+def log_error(msg):
+    #if hasattr(context,'req'):
+    #    context.req.log_error(msg)
+    #else:
+    #    sys.stderr.write(msg + "\n")
+    logger.error(msg)
+
 
 def parseVersion( version ):
     ret = {}
@@ -34,10 +46,29 @@ def parseVersion( version ):
         else:
             ret['epoch'] = None
     return ret  
+
+def getField(  field, fields ):
+    return field in fields
    
+RPMSENSE_LESS = 2
+RPMSENSE_GREATER = 4
+RPMSENSE_EQUAL = 8
+
+def flagToIntger( flag ):
+    result = 0
+    if flag:
+        for f in flag:
+            if f == '>':
+                result |= RPMSENSE_GREATER
+            if f == '<':
+                result |= RPMSENSE_LESS
+            if f == '=':
+                result |= RPMSENSE_EQUAL
+    return result
 
 class PkgInfo(object):
     """Base class for Package Info"""
+
     def __init__(self, path):
         self.path = os.path.abspath(path)
 
@@ -58,11 +89,6 @@ class PkgInfo(object):
 
 class DscInfo(PkgInfo):
     compressions = r"(gz|bz2)"
-    pkg_re = re.compile(r'\bSource:\s*(?P<pkg>.+)\s*\n')
-    buildarchs_re = re.compile(r'\bArchitecture:\s*(?P<buildarchs>.+)\s*\n')
-    format_re = re.compile(r'\bFormat:\s*(?P<format>[0-9.]+)\s*\n')
-    files_re = re.compile(r'\bFiles:\s*\n(?P<files>(([ ]+[^\n]+\n)+))')
-    version_re = re.compile(r'\bVersion:\s*((?P<epoch>\d+)\:)?(?P<version>[%s]+)\s*\n' % debian_version_chars)
 
     def getInfo(self,fields):
         ret={}
@@ -74,54 +100,160 @@ class DscInfo(PkgInfo):
         ret['exclusivearch'] = ''
         ret['excludearch'] = ''
 
-        f = file(self.path)
-        content = f.read()
+        fd = file(self.path)
+        content = fd.read()
         fromdir = os.path.dirname(self.path)
-        m = self.version_re.search(content)
-        if m :
-            if '-' in m.group('version'):
-                ret['release'] = m.group('version').split("-")[-1]
-                ret['version'] = "-".join(m.group('version').split("-")[0:-1])
-                ret['native'] = False
-            else:
-                ret['native'] = True # Debian native package
-                ret['version'] = m.group('version')
-                ret['release'] = "debiannative"
-            if m.group('epoch'):
-                ret['epoch'] = m.group('epoch')
-            else:
-                ret['epoch'] = None
-        m = self.pkg_re.search(content)
-        if m:
-            ret['name'] = m.group('pkg')
-        m = self.buildarchs_re.search(content)
-        if m:
-            ret['buildarchs'] = m.group('buildarchs')
-        m = self.format_re.search(content)
-        if m:
-            ret['pkgformat'] = m.group('format')
-        ret['files']=[{"md5sum":"0","size":"0","path":self.path}]
-        m = self.files_re.search(content)
-        if m:
-            #print "--------- %r" % m.group('files')
-            for l in m.group('files').lstrip().rstrip().split("\n"):
-                #print "--------- %r" % l
-                if len(l) > 0 :
-                    ss=l.lstrip().rstrip().split(" ")
-                    fileinfo={}
-                    fileinfo['md5sum'] = ss[0]
-                    fileinfo['size'] = ss[1]
-                    fileinfo['path'] = os.path.join(fromdir,ss[2])
-                    ret['files'].append(fileinfo)
 
-        f.close()
+        if getField( 'version', fields ):
+            version_re = re.compile(r'\bVersion:\s*((?P<epoch>\d+)\:)?(?P<version>[%s]+)\s*\n' % debian_version_chars)
+            m = version_re.search(content)
+            if m :
+                if '-' in m.group('version'):
+                    ret['release'] = m.group('version').split("-")[-1]
+                    ret['version'] = "-".join(m.group('version').split("-")[0:-1])
+                    ret['native'] = False
+                else:
+                    ret['native'] = True # Debian native package
+                    ret['version'] = m.group('version')
+                    ret['release'] = "debiannative"
+                if m.group('epoch'):
+                    ret['epoch'] = m.group('epoch')
+                else:
+                    ret['epoch'] = None
+
+        if getField( 'name', fields ):
+            pkg_re = re.compile(r'\bSource:\s*(?P<pkg>.+)\s*\n')
+            m = pkg_re.search(content)
+            if m:
+                ret['name'] = m.group('pkg')
+
+        if getField( 'buildarchs', fields ):
+            buildarchs_re = re.compile(r'\bArchitecture:\s*(?P<buildarchs>.+)\s*\n')
+            m = buildarchs_re.search(content)
+            if m:
+                ret['buildarchs'] = m.group('buildarchs')
+
+        if getField( 'pkgformat', fields ):
+            format_re = re.compile(r'\bFormat:\s*(?P<format>[0-9.]+)\s*\n')
+            m = format_re.search(content)
+            if m:
+                ret['pkgformat'] = m.group('format')
+
+        if getField( 'files', fields ) or getField( 'filenames', fields ):
+            files_re = re.compile(r'\bFiles:\s*\n(?P<files>(([ ]+[^\n]+\n)+))')
+            md5 = hashlib.md5()
+            md5.update(content)
+            ret['files']=[{"md5sum":md5.hexdigest(),"size":ret['size'],"path":self.path}]
+            m = files_re.search(content)
+            if m:
+                #print "--------- %r" % m.group('files')
+                for l in m.group('files').lstrip().rstrip().split("\n"):
+                    #print "--------- %r" % l
+                    if len(l) > 0 :
+                        ss=l.lstrip().rstrip().split(" ")
+                        fileinfo={}
+                        fileinfo['md5sum'] = ss[0]
+                        fileinfo['size'] = ss[1]
+                        fileinfo['path'] = os.path.join(fromdir,ss[2])
+                        ret['files'].append(fileinfo)
+            if getField( 'filenames', fields ):
+                ret['filenames'] = []
+                ret['filemd5s'] = []
+                ret['filesizes'] = []
+                ret['fileflags'] = []
+                ret['fileusername'] = []
+                ret['filegroupname'] = []
+                ret['filemtimes'] = []
+                ret['filemodes'] = []
+                for i in ret['files']:
+                    ret['filenames'].append(os.path.basename(i['path']))
+                    ret['filemd5s'].append(i['md5sum'])
+                    ret['filesizes'].append(i['size'])
+                    ret['fileflags'].append(0)
+                    ret['fileusername'].append('')
+                    ret['filegroupname'].append('')
+                    ret['filemtimes'].append(0)
+                    ret['filemodes'].append(0)
+
+        ret['PROVIDENAME'] = []
+        ret['PROVIDEFLAGS'] = []
+        ret['PROVIDEVERSION'] = []
+
+        ret['OBSOLETENAME'] = []
+        ret['OBSOLETEFLAGS'] = []
+        ret['OBSOLETEVERSION'] = []
+
+        if getField( 'REQUIRENAME', fields ):
+            ret['REQUIRENAME'] = []
+            ret['REQUIREFLAGS'] = []
+            ret['REQUIREVERSION'] = []
+            builddep_re = re.compile(r'\bBuild-Depends:\s*(?P<builddep>.+)\s*\n')
+            m = builddep_re.search( content )
+            builddeps = ''
+            if m:
+                builddeps = m.group('builddep')
+
+            buildindep_re = re.compile(r'\bBuild-Depends-Indep:\s*(?P<buildindep>.+)\s*\n')
+            m = buildindep_re.search( content )
+            buildindeps = None
+            if m:
+                buildindeps = m.group('buildindep')
+
+            if buildindeps:
+                builddeps += buildindeps
+            deps = builddeps.split(', ')
+            for d in deps:
+                nfv = d.split(' (')
+                ret['REQUIRENAME'].append( nfv[0])
+                if len(nfv) > 1:
+                    fv = nfv[1].strip('(').strip(')');
+                    f = fv.split(' ')[0] 
+                    v = fv.split(' ')[1] 
+                    ret['REQUIREFLAGS'].append(flagToIntger(f))
+                    ret['REQUIREVERSION'].append(v)
+                else:
+                    ret['REQUIREFLAGS'].append(flagToIntger(None))
+                    ret['REQUIREVERSION'].append('')
+
+        if getField( 'CONFLICTNAME', fields ):
+            ret['CONFLICTNAME'] = []
+            ret['CONFLICTFLAGS'] = []
+            ret['CONFLICTVERSION'] = []
+            buildconf_re = re.compile(r'\bBuild-Conflicts:\s*(?P<buildconf>.+)\s*\n')
+            m = buildconf_re.search( content )
+            buildconfs = ''
+            if m:
+                buildconfs = m.group('buildconf')
+
+            buildinconf_re = re.compile(r'\bBuild-Conflicts-Indep:\s*(?P<buildinconf>.+)\s*\n')
+            m = buildinconf_re.search( content )
+            buildinconfs = None
+            if m:
+                buildinconfs = m.group('buildinconf')
+
+            if buildinconfs:
+                buildconfs += buildinconfs
+            if len(buildconfs) > 0:
+                confs = buildconfs.split(', ')
+                for d in confs:
+                    nfv = d.split(' (')
+                    ret['CONFLICTNAME'].append( nfv[0])
+                    if len(nfv) > 1:
+                        fv = nfv[1].strip('(').strip(')');
+                        f = fv.split(' ')[0] 
+                        v = fv.split(' ')[1] 
+                        ret['CONFLICTFLAGS'].append(flagToIntger(f))
+                        ret['CONFLICTVERSION'].append(v)
+                    else:
+                        ret['CONFLICTFLAGS'].append(flagToIntger(None))
+                        ret['CONFLICTVERSION'].append('')
+
+
+        fd.close()
 
         ret['summary'] = ''
         ret['description'] = ''
 
-        fret = {}
-        for k in fields:
-            fret[k] = ret[k]
         return ret
 
 class DebInfo(PkgInfo):
@@ -199,6 +331,8 @@ class DebInfo(PkgInfo):
         lines=info['description'].split('\n')
         ret['summary'] = lines[0]
         ret['description'] = string.join(map(lambda l: ' ' + l, lines[1:]), '\n')
+
+        
 
         fret={}
         for k in fields:

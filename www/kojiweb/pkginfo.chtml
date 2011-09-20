@@ -1,0 +1,227 @@
+#import koji
+#from kojiweb import util
+#import time
+#import urllib
+
+#attr _PASSTHROUGH = ['pkgID', 'fileOrder', 'fileStart', 'buildrootOrder', 'buildrootStart']
+
+#include "includes/header.chtml"
+  #set $epoch = ($pkg.epoch != None and $str($pkg.epoch) + ':' or '')
+  #set $release = ($pkg.release != 'debiannative' and '-' + $str($pkg.release)  or '')
+  #set $arch = ( $build.pm_name != 'dpkg' and '.' + $str($pkg.arch) or ( $pkg.arch != 'src' and '_' + $str($pkg.arch) or '' ))
+  #set $type = ( $build.pm_name != 'dpkg' and 'rpm' or ( $pkg.arch != 'src' and 'deb' or 'dsc' ))
+  <h4>Information for PKG <a href="pkginfo?pkgID=$pkg.id">$pkg.name-$epoch$pkg.version$release${arch}.$type</a></h4>
+
+  <table>
+    <tr>
+      <th>ID</th><td>$pkg.id</td>
+    </tr>
+    <tr>
+      #if $build
+      <th>Name</th><td><a href="packageinfo?packageID=$build.package_id">$pkg.name</a></td>
+      #else
+      <th>Name</th><td>$pkg.name</td>
+      #end if
+    </tr>
+    <tr>
+      #if $build
+      <th>Version</th><td><a href="buildinfo?buildID=$build.id">$pkg.version</a></td>
+      #else
+      <th>Version</th><td>$pkg.version</td>
+      #end if
+    </tr>
+    <tr>
+      <th>Release</th><td>$release</td>
+    </tr>
+    <tr>
+      <th>Epoch</th><td>$pkg.epoch</td>
+    </tr>
+    <tr>
+      <th>Arch</th><td>$pkg.arch</td>
+    </tr>
+    #if $pkg.external_repo_id == 0
+    <tr>
+      <th>Summary</th><td class="rpmheader">$util.escapeHTML($summary)</td>
+    </tr>
+    <tr>
+      <th>Description</th><td class="rpmheader">$util.escapeHTML($description)</td>
+    </tr>
+    #end if
+    <tr>
+      <th>Build Time</th><td>$time.strftime('%Y-%m-%d %H:%M:%S', $time.gmtime($pkg.buildtime)) GMT</td>
+    </tr>
+    #if $build and $build.state == $koji.BUILD_STATES.DELETED
+    <tr>
+      <th>State</th><td class="deleted">deleted</td>
+    </tr>
+    #end if
+    #if $pkg.external_repo_id
+    <tr>
+      <th>External Repository</th><td><a href="externalrepoinfo?extrepoID=$pkg.external_repo_id">$pkg.external_repo_name</a></td>
+    </tr>
+    #end if
+    <tr>
+      <th>Size</th><td>$pkg.size</td>
+    </tr>
+    <tr>
+      <th>Payload Hash</th><td>$pkg.payloadhash</td>
+    </tr>
+    #if $builtInRoot
+    <tr>
+      <th>Buildroot</th><td><a href="buildrootinfo?buildrootID=$builtInRoot.id">$builtInRoot.tag_name-$builtInRoot.id-$builtInRoot.repo_id</a></td>
+    </tr>
+    #end if
+    #if $pkg.external_repo_id == 0
+    <tr>
+      <th>Provides</th>
+      <td class="container">
+        #if $len($provides) > 0
+        <table class="nested">
+          #for $dep in $provides
+          <tr>
+            <td>$util.escapeHTML($util.formatDep($dep.name, $dep.version, $dep.flags))</td>
+          </tr>
+          #end for
+        </table>
+        #else
+        No Provides
+        #end if
+      </td>
+    </tr>
+    <tr>
+      <th>Requires</th>
+      <td class="container">
+        #if $len($requires) > 0
+        <table class="nested">
+          #for $dep in $requires
+          <tr>
+            <td>$util.escapeHTML($util.formatDep($dep.name, $dep.version, $dep.flags))</td>
+          </tr>
+          #end for
+        </table>
+        #else
+        No Requires
+        #end if
+      </td>
+    </tr>
+    <tr>
+      <th>Obsoletes</th>
+      <td class="container">
+        #if $len($obsoletes) > 0
+        <table class="nested">
+          #for $dep in $obsoletes
+          <tr>
+            <td>$util.escapeHTML($util.formatDep($dep.name, $dep.version, $dep.flags))</td>
+          </tr>
+          #end for
+        </table>
+        #else
+        No Obsoletes
+        #end if
+      </td>
+    </tr>
+    <tr>
+      <th>Conflicts</th>
+      <td class="container">
+        #if $len($conflicts) > 0
+        <table class="nested">
+          #for $dep in $conflicts
+          <tr>
+            <td>$util.escapeHTML($util.formatDep($dep.name, $dep.version, $dep.flags))</td>
+          </tr>
+          #end for
+        </table>
+        #else
+        No Conflicts
+        #end if
+      </td>
+    </tr>
+    <tr>
+      <th id="filelist">Files</th>
+      <td class="container">
+        #if $len($files) > 0
+        <table class="nested data-list">
+          <tr>
+            <td class="paginate" colspan="2">
+              #if $len($filePages) > 1
+              <form class="pageJump" action="">
+                Page:
+                <select onchange="javascript: window.location = 'pkginfo?fileStart=' + this.value * $fileRange + '$util.passthrough_except($self, 'fileStart')#filelist';">
+                  #for $pageNum in $filePages
+                  <option value="$pageNum"#if $pageNum == $fileCurrentPage then ' selected="selected"' else ''#>#echo $pageNum + 1#</option>
+                  #end for
+                </select>
+              </form>
+              #end if
+              #if $fileStart > 0
+              <a href="pkginfo?fileStart=#echo $fileStart - $fileRange #$util.passthrough_except($self, 'fileStart')#filelist">&lt;&lt;&lt;</a>
+              #end if
+              <strong>#echo $fileStart + 1 # through #echo $fileStart + $fileCount # of $totalFiles</strong>
+              #if $fileStart + $fileCount < $totalFiles
+              <a href="pkginfo?fileStart=#echo $fileStart + $fileRange#$util.passthrough_except($self, 'fileStart')#filelist">&gt;&gt;&gt;</a>
+              #end if
+            </td>
+          </tr>
+          <tr class="list-header">
+            <th><a href="pkginfo?fileOrder=$util.toggleOrder($self, 'name', 'fileOrder')$util.passthrough_except($self, 'fileOrder', 'fileStart')#filelist">Name</a> $util.sortImage($self, 'name', 'fileOrder')</th>
+            <th><a href="pkginfo?fileOrder=$util.toggleOrder($self, 'size', 'fileOrder')$util.passthrough_except($self, 'fileOrder', 'fileStart')#filelist">Size</a> $util.sortImage($self, 'size', 'fileOrder')</th>
+          </tr>
+          #for $file in $files
+          <tr class="$util.rowToggle($self)">
+            <td><a href="fileinfo?pkgID=$pkg.id&amp;filename=$urllib.quote($file.name)">$util.escapeHTML($file.name)</a></td><td>$file.size</td>
+          </tr>
+          #end for
+        </table>
+        #else
+        No Files
+        #end if
+      </td>
+    </tr>
+    #end if
+    <tr>
+      <th id="buildrootlist">Component&nbsp;of</th>
+      <td class="container">
+        #if $len($buildroots) > 0
+        <table class="nested data-list">
+          <tr>
+            <td class="paginate" colspan="3">
+              #if $len($buildrootPages) > 1
+              <form class="pageJump" action="">
+                Page:
+                <select onchange="javascript: window.location = 'pkginfo?buildrootStart=' + this.value * $buildrootRange + '$util.passthrough_except($self, 'buildrootStart')#buildrootlist';">
+                  #for $pageNum in $buildrootPages
+                  <option value="$pageNum"#if $pageNum == $buildrootCurrentPage then ' selected="selected"' else ''#>#echo $pageNum + 1#</option>
+                  #end for
+                </select>
+              </form>
+              #end if
+              #if $buildrootStart > 0
+              <a href="pkginfo?buildrootStart=#echo $buildrootStart - $buildrootRange #$util.passthrough_except($self, 'buildrootStart')#buildrootlist">&lt;&lt;&lt;</a>
+              #end if
+              <strong>#echo $buildrootStart + 1 # through #echo $buildrootStart + $buildrootCount # of $totalBuildroots</strong>
+              #if $buildrootStart + $buildrootCount < $totalBuildroots
+              <a href="pkginfo?buildrootStart=#echo $buildrootStart + $buildrootRange#$util.passthrough_except($self, 'buildrootStart')#buildrootlist">&gt;&gt;&gt;</a>
+              #end if
+            </td>
+          </tr>
+          <tr class="list-header">
+            <th><a href="pkginfo?buildrootOrder=$util.toggleOrder($self, 'id', 'buildrootOrder')$util.passthrough_except($self, 'buildrootOrder', 'buildrootStart')#buildrootlist">Buildroot</a> $util.sortImage($self, 'id', 'buildrootOrder')</th>
+            <th><a href="pkginfo?buildrootOrder=$util.toggleOrder($self, 'create_event_time', 'buildrootOrder')$util.passthrough_except($self, 'buildrootOrder', 'buildrootStart')#buildrootlist">Created</a> $util.sortImage($self, 'create_event_time', 'buildrootOrder')</th>
+            <th><a href="pkginfo?buildrootOrder=$util.toggleOrder($self, 'state', 'buildrootOrder')$util.passthrough_except($self, 'buildrootOrder', 'buildrootStart')#buildrootlist">State</a> $util.sortImage($self, 'state', 'buildrootOrder')</th>
+          </tr>
+          #for $buildroot in $buildroots
+          <tr class="$util.rowToggle($self)">
+            <td><a href="buildrootinfo?buildrootID=$buildroot.id">$buildroot.tag_name-$buildroot.id-$buildroot.repo_id</a></td>
+            <td>$util.formatTime($buildroot.create_event_time)</td>
+            <td>$util.imageTag($util.brStateName($buildroot.state))</td>
+          </tr>
+          #end for
+        </table>
+        #else
+        No Buildroots
+        #end if
+      </td>
+    </tr>
+  </table>
+
+#include "includes/footer.chtml"

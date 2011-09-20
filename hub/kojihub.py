@@ -4046,14 +4046,14 @@ def get_channel(channelInfo, strict=False):
     return _singleRow(query, locals(), fields, strict)
 
 
-def query_buildroots(hostID=None, tagID=None, state=None, rpmID=None, archiveID=None, taskID=None, buildrootID=None, queryOpts=None):
+def query_buildroots(hostID=None, tagID=None, state=None, pkgID=None, archiveID=None, taskID=None, buildrootID=None, queryOpts=None):
     """Return a list of matching buildroots
 
     Optional args:
         hostID - only buildroots on host.
         tagID - only buildroots for tag.
         state - only buildroots in state (may be a list)
-        rpmID - only the buildroot the specified rpm was built in
+        pkgID - only the buildroot the specified pkg was built in
         taskID - only buildroots associated with task.
     """
     fields = [('buildroot.id', 'id'), ('buildroot.arch', 'arch'), ('buildroot.state', 'state'),
@@ -4090,10 +4090,10 @@ def query_buildroots(hostID=None, tagID=None, state=None, rpmID=None, archiveID=
             clauses.append('buildroot.state IN %(state)s')
         else:
             clauses.append('buildroot.state = %(state)i')
-    if rpmID != None:
+    if pkgID != None:
         joins.insert(0, 'buildroot_listing ON buildroot.id = buildroot_listing.buildroot_id')
         fields.append(('buildroot_listing.is_update', 'is_update'))
-        clauses.append('buildroot_listing.rpm_id = %(rpmID)i')
+        clauses.append('buildroot_listing.pkg_id = %(pkgID)i')
     if archiveID != None:
         joins.append('buildroot_archives ON buildroot.id = buildroot_archives.buildroot_id')
         clauses.append('buildroot_archives.archive_id = %(archiveID)i')
@@ -8286,6 +8286,50 @@ class RootExports(object):
 
         return _applyQueryOpts(results, queryOpts)
 
+    def getPKGDeps(self, pkgID, depType=None, queryOpts=None):
+        """Return dependency information about the PKG with the given ID.
+        If depType is specified, restrict results to dependencies of the given type.
+        Otherwise, return all dependency information.  A list of maps will be returned,
+        each with the following keys:
+        - name
+        - version
+        - flags
+        - type
+
+        If there is no RPM with the given ID, or the RPM has no dependency information,
+        an empty list will be returned.
+        """
+        if queryOpts is None:
+            queryOpts = {}
+        pkg_info = get_pkg(pkgID)
+        if not pkg_info or not pkg_info['build_id']:
+            return _applyQueryOpts([], queryOpts)
+        build_info = get_build(pkg_info['build_id'])
+        pkg_info['pm_name'] = build_info['pm_name']
+        pkg_path = os.path.join(koji.pathinfo.build(build_info), koji.pathinfo.pkg(pkg_info))
+        if not os.path.exists(pkg_path):
+            return _applyQueryOpts([], queryOpts)
+
+        results = []
+
+        for dep_name in ['REQUIRE','PROVIDE','CONFLICT','OBSOLETE']:
+            dep_id = getattr(koji, 'DEP_' + dep_name)
+            if depType is None or depType == dep_id:
+                #fields = koji.get_header_fields(pkg_path, [dep_name + 'NAME',
+                fields = koji.createPkgInfo(pkg_path).getInfo([dep_name + 'NAME',
+                                                           dep_name + 'VERSION',
+                                                           dep_name + 'FLAGS'])
+                for (name, version, flags) in zip(fields[dep_name + 'NAME'],
+                                                  fields[dep_name + 'VERSION'],
+                                                  fields[dep_name + 'FLAGS']):
+                    if queryOpts.get('asList'):
+                        results.append([name, version, flags, dep_id])
+                    else:
+                        results.append({'name': name, 'version': version, 'flags': flags, 'type': dep_id})
+
+        return _applyQueryOpts(results, queryOpts)
+
+
     def listRPMFiles(self, rpmID, queryOpts=None):
         """List files associated with the RPM with the given ID.  A list of maps
         will be returned, each with the following keys:
@@ -8327,6 +8371,51 @@ class RootExports(object):
 
         return _applyQueryOpts(results, queryOpts)
 
+    def listPKGFiles(self, pkgID, queryOpts=None):
+        """List files associated with the PKG with the given ID.  A list of maps
+        will be returned, each with the following keys:
+        - name
+        - digest
+        - md5 (alias for digest)
+        - digest_algo
+        - size
+        - flags
+
+        If there is no RPM with the given ID, or that RPM contains no files,
+        an empty list will be returned."""
+        if queryOpts is None:
+            queryOpts = {}
+        pkg_info = get_pkg(pkgID)
+        if not pkg_info or not pkg_info['build_id']:
+            return _applyQueryOpts([], queryOpts)
+        build_info = get_build(pkg_info['build_id'])
+        pkg_info['pm_name'] = build_info['pm_name']
+        pkg_path = os.path.join(koji.pathinfo.build(build_info), koji.pathinfo.pkg(pkg_info))
+        if not os.path.exists(pkg_path):
+            return _applyQueryOpts([], queryOpts)
+
+        results = []
+        #hdr = koji.get_rpm_header(rpm_path)
+        #fields = koji.get_header_fields(hdr, ['filenames', 'filemd5s', 'filesizes', 'fileflags',
+        fields = koji.createPkgInfo(pkg_path).getInfo( ['filenames', 'filemd5s', 'filesizes', 'fileflags',
+                                              'fileusername', 'filegroupname', 'filemtimes', 'filemodes'])
+        #digest_algo = koji.util.filedigestAlgo(hdr)
+        digest_algo = None
+
+        for (name, digest, size, flags, user, group, mtime, mode) in zip(fields['filenames'], fields['filemd5s'],
+                                                                         fields['filesizes'], fields['fileflags'],
+                                                                         fields['fileusername'], fields['filegroupname'],
+                                                                         fields['filemtimes'], fields['filemodes']):
+            if queryOpts.get('asList'):
+                results.append([name, digest, size, flags, digest_algo, user, group, mtime, mode])
+            else:
+                results.append({'name': name, 'digest': digest, 'digest_algo': digest_algo,
+                                'md5': digest, 'size': size, 'flags': flags,
+                                'user': user, 'group': group, 'mtime': mtime, 'mode': mode})
+
+        return _applyQueryOpts(results, queryOpts)
+
+
     def getRPMFile(self, rpmID, filename):
         """
         Get info about the file in the given RPM with the given filename.
@@ -8365,6 +8454,49 @@ class RootExports(object):
                         'mtime': fields['filemtimes'][i], 'mode': fields['filemodes'][i]}
             i += 1
         return {}
+
+    def getPKGFile(self, pkgID, filename):
+        """
+        Get info about the file in the given RPM with the given filename.
+        A map will be returned with the following keys:
+        - pkg_id
+        - name
+        - digest
+        - md5 (alias for digest)
+        - digest_algo
+        - size
+        - flags
+
+        If no such file exists, an empty map will be returned.
+        """
+        pkg_info = get_pkg(pkgID)
+        if not pkg_info or not pkg_info['build_id']:
+            return {}
+        build_info = get_build(pkg_info['build_id'])
+        pkg_info['pm_name'] = build_info['pm_name']
+        pkg_path = os.path.join(koji.pathinfo.build(build_info), koji.pathinfo.pkg(pkg_info))
+        if not os.path.exists(pkg_path):
+            return {}
+
+        #hdr = koji.get_rpm_header(rpm_path)
+        # use filemd5s for backward compatibility
+        #fields = koji.get_header_fields(hdr, ['filenames', 'filemd5s', 'filesizes', 'fileflags',
+        fields = koji.createPkgInfo(pkg_path).getInfo( ['filenames', 'filemd5s', 'filesizes', 'fileflags',
+                                              'fileusername', 'filegroupname', 'filemtimes', 'filemodes'])
+        #digest_algo = koji.util.filedigestAlgo(hdr)
+        digest_algo = None
+
+        i = 0
+        for name in fields['filenames']:
+            if name == filename:
+                return {'pkg_id': pkg_info['id'], 'name': name, 'digest': fields['filemd5s'][i],
+                        'digest_algo': digest_algo, 'md5': fields['filemd5s'][i],
+                        'size': fields['filesizes'][i], 'flags': fields['fileflags'][i],
+                        'user': fields['fileusername'][i], 'group': fields['filegroupname'][i],
+                        'mtime': fields['filemtimes'][i], 'mode': fields['filemodes'][i]}
+            i += 1
+        return {}
+
 
     def getRPMHeaders(self, rpmID=None, taskID=None, filepath=None, headers=None):
         """

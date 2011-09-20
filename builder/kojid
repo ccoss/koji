@@ -2532,7 +2532,8 @@ class DpkgBuildSPKGFromSCMTask(BuildSPKGFromSCMTask):
     def getSPKG(self,resultdir):
         """get source package list from result dir"""
         dsc = glob.glob('%s/*.dsc' % resultdir)
-        files = DscInfo(dsc).getInfo()['files']
+        #files = DscInfo(dsc).getInfo()['files']
+        files = koji.createPkgInfo(dsc).getInfo(('files',))['files']
         spkgs = []
         for f in files:
             spkgs.append(f['path'])

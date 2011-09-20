@@ -1309,6 +1309,58 @@ def rpminfo(req, rpmID, fileOrder='name', fileStart=None, buildrootOrder='-id', 
 
     return _genHTML(req, 'rpminfo.chtml')
 
+def pkginfo(req, pkgID, fileOrder='name', fileStart=None, buildrootOrder='-id', buildrootStart=None):
+    values = _initValues(req, 'PKG Info', 'builds')
+    server = _getServer(req)
+
+    pkgID = int(pkgID)
+    pkg = server.getPKG(pkgID)
+
+
+    build = None
+    if pkg['build_id'] != None:
+        build = server.getBuild(pkg['build_id'])
+    
+    pkg['realrelease'] = pkg['release'] != 'debiannative' and '-' + pkg['release'] or ''
+    pkg['realarch'] = build['pm_name'] != 'dpkg' and '.' + pkg['arch'] or ''
+    pkg['type'] = build['pm_name'] != 'dpkg' and 'rpm' or ( pkg['arch' ] != 'src' and 'deb' or 'dsc')
+    values['title'] = '%(name)s-%%s%(version)s%(realrelease)s%(realarch)s.%(type)s' % pkg + ' | PKG Info'
+    epochStr = ''
+    if pkg['epoch'] != None:
+        epochStr = '%s:' % pkg['epoch']
+    values['title'] = values['title'] % epochStr
+
+    builtInRoot = None
+    if pkg['buildroot_id'] != None:
+        builtInRoot = server.getBuildroot(pkg['buildroot_id'])
+    if pkg['external_repo_id'] == 0:
+        values['requires'] = server.getPKGDeps(pkg['id'], koji.DEP_REQUIRE)
+        values['requires'].sort(_sortbyname)
+        values['provides'] = server.getPKGDeps(pkg['id'], koji.DEP_PROVIDE)
+        values['provides'].sort(_sortbyname)
+        values['obsoletes'] = server.getPKGDeps(pkg['id'], koji.DEP_OBSOLETE)
+        values['obsoletes'].sort(_sortbyname)
+        values['conflicts'] = server.getPKGDeps(pkg['id'], koji.DEP_CONFLICT)
+        values['conflicts'].sort(_sortbyname)
+        headers = server.getPKGHeaders(pkg['id'], headers=['summary', 'description'])
+        values['summary'] = koji.fixEncoding(headers.get('summary'))
+        values['description'] = koji.fixEncoding(headers.get('description'))
+    buildroots = kojiweb.util.paginateMethod(server, values, 'listBuildroots', kw={'pkgID': pkg['id']},
+                                             start=buildrootStart, dataName='buildroots', prefix='buildroot',
+                                             order=buildrootOrder)
+
+    values['pkgID'] = pkgID
+    values['pkg'] = pkg
+    values['build'] = build
+    values['builtInRoot'] = builtInRoot
+    values['buildroots'] = buildroots
+    
+    files = kojiweb.util.paginateMethod(server, values, 'listPKGFiles', args=[pkg['id']],
+                                        start=fileStart, dataName='files', prefix='file', order=fileOrder)
+
+    return _genHTML(req, 'pkginfo.chtml')
+
+
 def archiveinfo(req, archiveID, fileOrder='name', fileStart=None, buildrootOrder='-id', buildrootStart=None):
     values = _initValues(req, 'Archive Info', 'builds')
     server = _getServer(req)
@@ -1345,22 +1397,22 @@ def archiveinfo(req, archiveID, fileOrder='name', fileStart=None, buildrootOrder
 
     return _genHTML(req, 'archiveinfo.chtml')
 
-def fileinfo(req, filename, rpmID=None, archiveID=None):
+def fileinfo(req, filename, pkgID=None, archiveID=None):
     values = _initValues(req, 'File Info', 'builds')
     server = _getServer(req)
 
-    values['rpm'] = None
+    values['pkg'] = None
     values['archive'] = None
     
-    if rpmID:
-        rpmID = int(rpmID)
-        rpm = server.getRPM(rpmID)
-        if not rpm:
-            raise koji.GenericError, 'invalid RPM ID: %i' % rpmID
-        file = server.getRPMFile(rpm['id'], filename)
+    if pkgID:
+        pkgID = int(pkgID)
+        pkg = server.getPKG(pkgID)
+        if not pkg:
+            raise koji.GenericError, 'invalid PKG ID: %i' % pkgID
+        file = server.getPKGFile(pkg['id'], filename)
         if not file:
-            raise koji.GenericError, 'no file %s in RPM %i' % (filename, rpmID)
-        values['rpm'] = rpm
+            raise koji.GenericError, 'no file %s in PKG %i' % (filename, pkgID)
+        values['pkg'] = pkg
     elif archiveID:
         archiveID = int(archiveID)
         archive = server.getArchive(archiveID)

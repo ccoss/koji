@@ -3,8 +3,8 @@
 #import datetime
 
 #include "includes/header.chtml"
-  #if $rpm
-  <h4>Information for file <a href="fileinfo?rpmID=$rpm.id&amp;filename=$urllib.quote($file.name)">$file.name</a></h4>
+  #if $pkg
+  <h4>Information for file <a href="fileinfo?pkgID=$pkg.id&amp;filename=$urllib.quote($file.name)">$file.name</a></h4>
   #elif $archive
   <h4>Information for file <a href="fileinfo?archiveID=$archive.id&amp;filename=$urllib.quote($file.name)">$file.name</a></h4>
   #end if
@@ -13,7 +13,7 @@
     <tr>
       <th>Name</th><td>$file.name</td>
     </tr>
-    #if $rpm
+    #if $pkg
     <tr>
       <th>Digest ($file.digest_algo)</th><td>$file.digest</td>
     </tr>
@@ -41,7 +41,7 @@
       <th>Mode</th><td class="rpmheader">$util.formatMode($file.mode)</td>
     </tr>
     #end if
-    #if $rpm
+    #if $pkg
     <tr>
       <th>Flags</th>
       <td>
@@ -51,8 +51,8 @@
       </td>
     </tr>
     <tr>
-      #set $epoch = ($rpm.epoch != None and $str($rpm.epoch) + ':' or '')
-      <th>RPM</th><td><a href="rpminfo?rpmID=$rpm.id">$rpm.name-$epoch$rpm.version-$rpm.release.${rpm.arch}.rpm</a></td>
+      #set $epoch = ($pkg.epoch != None and $str($pkg.epoch) + ':' or '')
+      <th>RPM</th><td><a href="pkginfo?pkgID=$pkg.id">$pkg.name-$epoch$pkg.version-$pkg.release.${pkg.arch}.rpm</a></td>
     </tr>
     #elif $archive
     <tr>
