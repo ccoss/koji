@@ -11,6 +11,9 @@
     <tr>
       <th>ID</th><td>$package.id</td>
     </tr>
+    <tr>
+      <th>PackageManager</th><td></td>
+    </tr>
     
     <tr>
       <th id="buildlist">Builds</th>

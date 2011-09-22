@@ -139,7 +139,11 @@
             #if $build['pm_name'] == 'rpm'
             #set $pkgfile = '%(name)s-%(version)s-%(release)s.%(arch)s.rpm' % $pkg
             #else
+            #if $pkg['release'] != 'debiannative'
             #set $pkgfile = '%(name)s_%(version)s-%(release)s_%(arch)s.deb' % $pkg
+            #else
+            #set $pkgfile = '%(name)s_%(version)s_%(arch)s.deb' % $pkg
+            #end if
             #end if
             <td></td>
             <td>
