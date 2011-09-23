@@ -316,7 +316,7 @@ class DpkgBuildRoot(BuildRoot):
         self.session.host.setBuildRootState(self.id,'BUILDING')
         args = ["-S","-uc","-us","-sa","--git-export-dir=%s"%self.resultdir()]
         
-        cmd = ["cd %s && /usr/bin/git-buildpackage"%sourcedir]
+        cmd = ["/usr/bin/koji-git-buildpackage",sourcedir]
         rv = self._build(cmd, args)
         
         if rv:

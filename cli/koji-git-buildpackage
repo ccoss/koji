@@ -1,0 +1,8 @@
+#! /bin/bash
+
+#wrapper of git-buildpackage
+
+cd $1
+shift
+#echo $@
+git-buildpackage $@
