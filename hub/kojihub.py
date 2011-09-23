@@ -4405,7 +4405,7 @@ def import_build_pkgs(spkg, pkgs, brmap=None, task_id=None, build_id=None, logs=
     fn = "%s/%s" % (uploadpath,main_spkg)
     #build = koji.get_header_fields(fn,('name','version','release','epoch',
     #                                    'sourcepackage'))
-    build = koji.createPkgInfo(fn).getInfo(('name','version','release','epoch','sourcepackage'))
+    build = koji.createPkgInfo(fn).getInfo(('name','version','release','epoch','sourcepackage','type'))
 
     if build['sourcepackage'] != 1:
         raise koji.GenericError, "not a source package: %s" % fn
@@ -4558,7 +4558,7 @@ def import_pkg(fn,buildinfo=None,brootid=None,wrapper=False):
     #hdr = koji.get_rpm_header(fn)
     #pkginfo = koji.get_header_fields(hdr,['name','version','release','epoch',
     #                'sourcepackage','arch','buildtime','sourceNVRA'])
-    pkginfo = koji.createPkgInfo(fn).getInfo(('name','version','release','epoch','sourcepackage','arch','buildtime','sourceNVRA'))
+    pkginfo = koji.createPkgInfo(fn).getInfo(('name','version','release','epoch','sourcepackage','arch','buildtime','sourceNVRA','type','files'))
     if pkginfo['type'] == "rpm":
         hdr = koji.get_rpm_header(fn)
 

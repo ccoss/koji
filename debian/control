@@ -38,7 +38,7 @@ Description:Koji hub plugins
 Package: koji-builder
 Architecture: all
 Depends: ${misc:Depends},${python:Depends},
-         koji(= ${source:Version})
+         koji(= ${source:Version}),git-buildpackage
 Description: Koji RPM builder daemon
  koji-builder is the daemon that runs on build machines and executes
  tasks that come through the Koji system.

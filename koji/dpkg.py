@@ -96,6 +96,7 @@ class DpkgInfo(PkgInfo):
     def get_version( self ):pass
     def get_release( self ):pass
     def get_epoch( self ):pass
+    def get_sourceNVRA( self ):pass
 
     def get_sourcepackage( self ):pass
     def get_type( self ):pass

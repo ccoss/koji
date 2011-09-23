@@ -314,9 +314,9 @@ class DpkgBuildRoot(BuildRoot):
 
     def build_spkg(self, specfile, sourcedir, source_cmd):
         self.session.host.setBuildRootState(self.id,'BUILDING')
-        args = ["-S","-uc","-us","-sa","--git-export-dir=%s"%self.resultdir()]
+        args = [sourcedir,"-S","-uc","-us","-sa","--git-export-dir=%s"%self.resultdir()]
         
-        cmd = ["/usr/bin/koji-git-buildpackage",sourcedir]
+        cmd = ["/usr/bin/koji-git-buildpackage"]
         rv = self._build(cmd, args)
         
         if rv:
@@ -1014,7 +1014,7 @@ class BuildTask(BaseTaskHandler):
         relpath = "work/%s" % spkg
         opts = dict([(k, getattr(self.options, k)) for k in 'topurl','topdir'])
         fn = koji.getRemoteFilePath(relpath, **opts)
-        data = koji.createPkgInfo(fn).getInfo(['name','version','release','epoch','buildarchs','exclusivearch','excludearch'])
+        data = koji.createPkgInfo(fn).getInfo(['name','version','release','epoch','buildarchs','exclusivearch','excludearch','sourcepackage','type'])
         #fo.close()
         if data['sourcepackage'] != 1:
             raise koji.BuildError, "%s is not a source package" % spkg
@@ -2437,8 +2437,8 @@ class BuildSPKGFromSCMTask(BaseTaskHandler):
         self.logger.debug("Running srpm build")
         broot.build_spkg(spec_file, sourcedir, scm.source_cmd)
 
-        spkgs = getSPKG(broot.resultdir())
-        checkSPKG(spkgs)
+        spkgs = self.getSPKG(broot.resultdir())
+        self.checkSPKG(spkgs)
 
 
         #upload srpm and return
@@ -2446,9 +2446,10 @@ class BuildSPKGFromSCMTask(BaseTaskHandler):
             self.uploadFile(f)
 
         broot.expire()
-
+        
+        rspkgs = ["%s/%s" % (uploadpath, os.path.basename( i )) for i in spkgs]
 #        return {'spkg': "%s/%s" % (uploadpath, srpm_name)}
-        return {'spkgs': spkgs}
+        return {'spkgs': rspkgs}
 
 
 class RpmBuildSPKGFromSCMTask(BuildSPKGFromSCMTask):
@@ -2533,7 +2534,9 @@ class DpkgBuildSPKGFromSCMTask(BuildSPKGFromSCMTask):
         """get source package list from result dir"""
         dsc = glob.glob('%s/*.dsc' % resultdir)
         #files = DscInfo(dsc).getInfo()['files']
-        files = koji.createPkgInfo(dsc).getInfo(('files',))['files']
+        if len(dsc) == 0:
+            raise koji.BuildError,"no dsc file finded in %s" % resultdir
+        files = koji.createPkgInfo(dsc[0]).getInfo(('files',))['files']
         spkgs = []
         for f in files:
             spkgs.append(f['path'])

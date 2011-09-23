@@ -5,4 +5,5 @@ etc/sysconfig/kojid
 usr/libexec/kojid
 usr/libexec/kojid/mergerepos
 usr/sbin/kojid
-
+usr/bin/koji-scanpackages
+usr/bin/koji-git-buildpackage
