@@ -53,7 +53,14 @@ DROP TABLE events;
 DROP FUNCTION get_event();
 DROP FUNCTION get_event_time(INTEGER);
 
+DROP SCHEMA koji CASCADE;
+
 BEGIN WORK;
+
+GRANT ALL PRIVILEGES ON DATABASE koji to fas;
+--GRANT ALL ON LANGUAGE plpythonu TO fedora;
+
+CREATE SCHEMA koji AUTHORIZATION koji;
 
 -- id,  packagemanger name  package file types
 CREATE TABLE packagemanager (
@@ -73,14 +80,14 @@ CREATE TABLE events (
 
 -- A function that creates an event and returns the id, used as DEFAULT value for versioned tables
 CREATE FUNCTION get_event() RETURNS INTEGER AS '
-	INSERT INTO events (time) VALUES (''now'');
-	SELECT currval(''events_id_seq'')::INTEGER;
+	INSERT INTO koji.events (time) VALUES (''now'');
+	SELECT currval(''koji.events_id_seq'')::INTEGER;
 ' LANGUAGE SQL;
 
 -- A convenience function for converting events to timestamps, useful for
 -- quick queries where you want to avoid JOINs.
 CREATE FUNCTION get_event_time(INTEGER) RETURNS TIMESTAMP AS '
-	SELECT time FROM events WHERE id=$1;
+	SELECT time FROM koji.events WHERE id=$1;
 ' LANGUAGE SQL;
 
 -- this table is used to label events
