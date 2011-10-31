@@ -1,4 +1,4 @@
-FILES = koji
+FILES = koji koji-git-buildpackage koji-scanpackages
 
 _default:
 	@echo "nothing to make.  try make install"
