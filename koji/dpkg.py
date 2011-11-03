@@ -139,6 +139,7 @@ class DpkgInfo(PkgInfo):
 
     def get_summary( self ):pass
     def get_description( self ):pass
+    def get_sigmd5( self ):pass
 
 
 class DscInfo(DpkgInfo):

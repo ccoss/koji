@@ -1305,7 +1305,7 @@ def handle_import(options, session, args):
 #        data = koji.get_header_fields(path, ('name','version','release','epoch',
 #                                    'arch','sigmd5','sourcepackage','sourcerpm'))
         #data = koji.get_pkg_info(path)
-        data = koji.createPkgInfo(path).getInfo(('name','version','release','epoch','arch','sigmd5','sourcepackage','sourceNVRA'))
+        data = koji.createPkgInfo(path).getInfo(('name','version','release','epoch','arch','sigmd5','sourcepackage','sourceNVRA','type','size','files'))
         res = session.getPackageManager(data['type'])
         data['pmanager'] = res['name']
 
