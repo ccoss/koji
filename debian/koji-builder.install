@@ -7,3 +7,4 @@ usr/libexec/kojid/mergerepos
 usr/sbin/kojid
 usr/bin/koji-scanpackages
 usr/bin/koji-git-buildpackage
+usr/share/kojid/koji

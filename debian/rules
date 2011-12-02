@@ -23,4 +23,13 @@ include /usr/share/quilt/quilt.make
 
 override_dh_auto_build:
 	
+
+override_dh_auto_install:
+	make install DESTDIR=$(CURDIR)/debian/tmp
+	install -p -m 755 builder/kojid.init.debian $(CURDIR)/debian/tmp/etc/init.d/kojid
+	mkdir -p $(CURDIR)/debian/tmp/usr/share/kojid/
+	install -p -m 755 builder/koji.debootstrap $(CURDIR)/debian/tmp/usr/share/kojid/koji
+	install -p -m 755 cli/koji-git-buildpackage $(CURDIR)/debian/tmp/usr/bin/koji-git-buildpackage
+	install -p -m 755 cli/koji-scanpackages $(CURDIR)/debian/tmp/usr/bin/koji-scanpackages
+
 .PHONY: patch unpatch
