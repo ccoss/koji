@@ -7120,10 +7120,14 @@ class RootExports(object):
 
             taskOpts['priority'] = koji.PRIO_DEFAULT + priority
 
+	build_target = get_build_target(target)
+	dest_tag = get_tag(build_target['dest_tag'])
+	pm_name = dest_tag['pm_name']	
+
         if img_type == 'livecd':
-            task_type = 'createLiveCD'
+            task_type = pm_name + '::createLiveCD'
         elif img_type == 'appliance':
-            task_type = 'createAppliance'
+            task_type = pm_name + '::createAppliance'
         else:
             raise koji.GenericError, 'unsupported image type: %s' % img_type
 
