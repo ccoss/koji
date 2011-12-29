@@ -62,7 +62,7 @@ try:
     import pykickstart.handlers.control as kscontrol
     import pykickstart.errors as kserrors
     import hashlib
-    import iso9660 # from pycdio
+    #import iso9660 # from pycdio
     image_enabled = True
 except ImportError:
     pass
@@ -225,8 +225,8 @@ class BuildRoot(object):
 ######################################################################
 class DpkgBuildRoot(BuildRoot):
 
-    def __init__( self ):
-	BuildRoot.__init__()
+    #def __init__( self ):
+    #	BuildRoot.__init__()
 
     def init( self ):
         self.session.host.setBuildRootState(self.id,'BUILDING')
@@ -234,7 +234,7 @@ class DpkgBuildRoot(BuildRoot):
         koji.ensuredir(self.resultdir())
         # init buildroot
         #pbuilder modifications:1.no apt-cache backup 2.components could be null 3 do not copy source to result dir 
-        args = ["--no-targz","--buildplace", self.rootdir(), "--mirror", self.options.mainurl , "--distribution", "repos/%s/%s/%s/repodata/" % ( self.tag_name, self.repoid, arch ),"--aptconfdir", "%s/repos/%s/%s/%s/repodata/" % ( koji.pathinfo.topdir, self.tag_name, self.repoid, arch ) ]
+        args = ["--no-targz","--buildplace", self.rootdir(), "--mirror", self.options.mainurl , "--distribution", "repos/%s/%s/%s/repodata/" % ( self.tag_name, self.repoid, self.br_arch ),"--aptconfdir", "%s/repos/%s/%s/%s/repodata/" % ( koji.pathinfo.topdir, self.tag_name, self.repoid, self.br_arch ) ]
 
         extargs = [ "--create", "--logfile", "%s/root.log"%self.resultdir(), "--debootstrapscript" ,"/usr/share/kojid/koji" ]
         extargs.extend(args)
@@ -2406,7 +2406,7 @@ class RpmLiveCDTask(RpmImageTask):
 class DpkgImageTask(BaseTaskHandler):
     Methods = []
     	
-    def _chroot( rootdir, options ):
+    def _chroot( self, rootdir, options ):
 	imgCrtInstall = "apt-get install image-creator"
 	opt = ''' chroot %s /bin/bash -c "%s"''' % ( rootdir, imgCrtInstall )	
 	os.system( opt )
