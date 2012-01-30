@@ -62,10 +62,14 @@ try:
     import pykickstart.handlers.control as kscontrol
     import pykickstart.errors as kserrors
     import hashlib
-    #import iso9660 # from pycdio
+    #import iso9660 from pycdio
+    #from pycdio import iso9660
+    import iso9660
     image_enabled = True
 except ImportError:
-    pass
+    pass 
+#except:
+#    pass
 
 def main(options, session):
     logger = logging.getLogger("koji.build")
@@ -225,8 +229,8 @@ class BuildRoot(object):
 ######################################################################
 class DpkgBuildRoot(BuildRoot):
 
-    #def __init__( self ):
-    #	BuildRoot.__init__()
+#    def __init__( self ):
+#	BuildRoot.__init__()
 
     def init( self ):
         self.session.host.setBuildRootState(self.id,'BUILDING')
@@ -2052,13 +2056,14 @@ class RpmImageTask(BaseTaskHandler):
                 ks.handler.repo.repoList.append(repo_class(baseurl=user_repo, name='koji-override-%i' % index))
                 index += 1
         else:
-            topurl = getattr(self.options, 'topurl')
+            topurl = getattr(self.options, 'mainurl')
             if not topurl:
                 raise koji.LiveCDError, 'topurl must be defined in kojid.conf'
-            path_info = koji.PathInfo(topdir=topurl)
-            repopath = path_info.repo(repo_info['id'],
-                                      target_info['build_tag_name'])
-            baseurl = '%s/%s' % (repopath, arch)
+            #path_info = koji.PathInfo(topdir=topurl)
+            #repopath = path_info.repo(repo_info['id'],
+            #                          target_info['build_tag_name'])
+            dist = "repos/%s/%s/%s/repodata/" % ( target_info['build_tag_name'], repo_info['id'], arch ) 
+            baseurl = '%s %s' % (topurl, dist)
             self.logger.debug('BASEURL: %s' % baseurl)
             ks.handler.repo.repoList.append(repo_class(baseurl=baseurl, name='koji-%s-%i' % (target_info['build_tag_name'], repo_info['id'])))
 
@@ -2404,14 +2409,52 @@ class RpmLiveCDTask(RpmImageTask):
 # Changed by Yangjinfeng at 2011.12.20
 ######################################################################
 class DpkgImageTask(BaseTaskHandler):
+
     Methods = []
+
+    def _imgInstall( self, rootdir ):
+        imgCrtInstall = "apt-get install image-creator -y --force-yes"
+        opt = ''' chroot %s /bin/bash -c "%s"''' % ( rootdir, imgCrtInstall )
+        os.system( opt )
     	
+	
+    def _livecdCreator( self, rootdir ):
+
+	files = os.listdir( os.path.join( rootdir, 'tmp') )
+	ksfile = None
+	for afile in files:
+	    if afile.endswith('.ks'):
+	        if not ksfile:
+                    ksfile = '/tmp/' + os.path.basename(afile)
+                else:
+                    raise koji.LiveCDError, 'multiple .ks files found: %s and %s' % (ksfile, afile) 
+        if not ksfile:
+            raise koji.LiveCDError, 'No .ks files found ' 
+
+	options = 'livecd-creator -c %s ' % ksfile
+	#cmd = ''' chroot %s /bin/bash -c "%s; ls / >> /xxxx.log; ls /tmp/ >> /xxxx.log" ''' % ( rootdir, options )
+	cmd = ''' chroot %s /bin/bash -c "%s 1>/tmp/img-create.log 2>&1" ''' % ( rootdir, options )
+        self.logger.debug("cmd is: %s" % cmd )  
+        self.logger.info("cmd is: %s" % cmd )  
+	os.system( cmd )
+
+	files_ = os.listdir( rootdir )
+	isofile_ = None
+	for afile_ in files_:
+	    if afile_.endswith('.iso'):
+                isofile_ = afile_
+                self.logger.debug("iso file is: %s" % isofile_ )  
+                self.logger.info("iso file is: %s" % isofile_ )  
+
+        if not isofile_:
+            raise koji.LiveCDError,'.iso file could not found !!!'
+        else:
+	    os.system( "mv %s %s" % ( os.path.join( rootdir, isofile_), os.path.join( rootdir, 'tmp') ) )
+	
     def _chroot( self, rootdir, options ):
-	imgCrtInstall = "apt-get install image-creator"
-	opt = ''' chroot %s /bin/bash -c "%s"''' % ( rootdir, imgCrtInstall )	
-	os.system( opt )
         cmd = ''' chroot %s /bin/bash -c "%s"''' % (rootdir, options)
         os.system( cmd )
+
 
     def makeImgBuildRoot(self, buildtag, repoinfo, arch, inst_group):
         """
@@ -2534,20 +2577,29 @@ class DpkgImageTask(BaseTaskHandler):
                                     "'%s' : %s" % (kspath, e))
 
         ks.handler.repo.repoList = [] # delete whatever the ks file told us
+#####################################################################################
+#baseurl_changed by yangjinfeng at 2012.1.4
+#####################################################################################
         if self.opts.get('repo'):
             user_repos = self.opts['repo'].split(',')
             index = 0
             for user_repo in user_repos:
+		user_repo = '''"%s"''' % user_repo
                 ks.handler.repo.repoList.append(repo_class(baseurl=user_repo, name='koji-override-%i' % index))
                 index += 1
         else:
-            topurl = getattr(self.options, 'topurl')
+            #topurl = getattr(self.options, 'topurl')
+            topurl = getattr(self.options, 'mainurl')
             if not topurl:
                 raise koji.LiveCDError, 'topurl must be defined in kojid.conf'
-            path_info = koji.PathInfo(topdir=topurl)
-            repopath = path_info.repo(repo_info['id'],
-                                      target_info['build_tag_name'])
-            baseurl = '%s/%s' % (repopath, arch)
+            #path_info = koji.PathInfo(topdir=topurl)
+            #repopath = path_info.repo(repo_info['id'],
+            #                          target_info['build_tag_name'])
+
+            dist = "repos/%s/%s/%s/repodata/" % ( target_info['build_tag_name'], repo_info['id'], arch ) 
+            baseurl = '''"%s %s"''' % (topurl, dist)
+            #baseurl = '%s/%s' % (repopath, arch)
+
             self.logger.debug('BASEURL: %s' % baseurl)
             ks.handler.repo.repoList.append(repo_class(baseurl=baseurl, name='koji-%s-%i' % (target_info['build_tag_name'], repo_info['id'])))
 
@@ -2654,12 +2706,13 @@ class DpkgApplianceTask(DpkgImageTask):
             arg = self.opts.get(arg_name)
             if arg != None: 
                 cmd.extend(['--%s' % arg_name, arg])
+	cmd = ' '.join( cmd )
 	self._chroot( broot.rootdir(), cmd ) 
         # Run appliance-creator
         self.uploadFile(os.path.join(broot.rootdir(), app_log[1:]))
-     #    if rv:
-     #       raise koji.ApplianceError, \
-     #          "Could not create appliance: %s" % parseStatus(rv, 'appliance-creator') + "; see root.log or appliance.log for more information"
+     #if rv:
+      #      raise koji.ApplianceError, \
+       #        "Could not create appliance: %s" % parseStatus(rv, 'appliance-creator') + "; see root.log or appliance.log for more information"
 ######################################################################
 # Changed by Yangjinfeng at 2011.12.20
 ######################################################################
@@ -2822,16 +2875,49 @@ class DpkgLiveCDTask(DpkgImageTask):
 ######################################################################
 # Changed by Yangjinfeng at 2011.12.20
 ######################################################################
-        cmd = ['/usr/bin/livecd-creator', '-c', kskoji, '-d', '-v', '--logfile', livecd_log, '--cache', cachedir]
+        #cmd = ['/usr/bin/livecd-creator', '-c', kskoji, '-d', '-v', '--logfile', livecd_log, '--cache', cachedir]
+        #cmd = ['/usr/sbin/livecd-creator', '-c', kskoji,  '--cache', cachedir]
+
+        #self.logger.debug('kskoji is: %s' % kskoji)
+	#os.system( 'echo %s > /ttt ' % kskoji )
+
+	#cmd = ' '.join( cmd )
+        #self.logger.debug('cmd is: %s' % cmd )
+	#os.system( 'echo %s > /fff ' % cmd ) 
         # we set the fs label to the same as the isoname if it exists, 
         # taking at most 32 characters
         name_opt = self.opts.get('isoname')
         if name_opt:
             cmd.extend(('-f', name_opt[:32]))
 
+######################################################################
+# Changed by Yangjinfeng at 2011.12.31
+######################################################################
+	# Install livecd-creator
+	self._imgInstall( broot.rootdir() )
+	
+	# mount proc and sys
+	target_proc = broot.rootdir() + "/proc"
+	target_sys  = broot.rootdir() + "/sys"
+	target_devpts  = broot.rootdir() + "/dev/pts"
+	os.system("mount -t proc proc %s" % target_proc)
+	os.system("mount -t sysfs sysfs %s" % target_sys)
+	os.system("mount -t devpts devpts %s" % target_devpts)
+
         # Run livecd-creator
-	self._chroot( broot.rootdir(), cmd )
+	self._livecdCreator( broot.rootdir() )
+
+	#self._chroot( broot.rootdir(), cmd )
+	
+	#raise koji.LiveCDError,"stop here and please check your iso===================>>>>>>>>"
+
      #   rv = broot.mock(['--cwd', '/tmp', '--chroot', '--'] + cmd)
+
+	os.system("umount  %s" % target_proc )
+	os.system("umount  %s" % target_sys )
+	os.system("umount  %s" % target_devpts )
+
+	
         self.uploadFile(os.path.join(broot.rootdir(), livecd_log[1:]))
      #   if rv:
      #       raise koji.LiveCDError, \
@@ -2881,7 +2967,7 @@ class DpkgLiveCDTask(DpkgImageTask):
         self.genISOManifest(isosrc, manifest)
         self.uploadFile(manifest)
 
-        if not self.opts.get('scratch'):
+        #if not self.opts.get('scratch'):
 #############################################################################################
             #hdrlist = self.getImagePackages(os.path.join(broot.rootdir(), cachedir[1:]))
             #hash = self.getImageHash(isosrc)
@@ -2889,18 +2975,18 @@ class DpkgLiveCDTask(DpkgImageTask):
 
             # Import info about the image into the database, unless this is a
             # scratch image.
-            image_id = self.session.host.importImage(self.id, isofile, filesize, arch,
-                                                'LiveCD ISO', hash, hdrlist)
+            #image_id = self.session.host.importImage(self.id, isofile, filesize, arch,
+            #                                    'LiveCD ISO', hash, hdrlist)
 
         broot.expire()
-        if opts.get('scratch'):
-            return 'Scratch image created: %s' % \
-                   os.path.join(koji.pathinfo.work(),
-                                koji.pathinfo.taskrelpath(self.id), isofile)
-        else:
-            return 'Created image: %s' % \
-                   os.path.join(koji.pathinfo.imageFinalPath(),
-                                koji.pathinfo.livecdRelPath(image_id), isofile)
+        #if opts.get('scratch'):
+        #    return 'Scratch image created: %s' % \
+        #           os.path.join(koji.pathinfo.work(),
+        #                        koji.pathinfo.taskrelpath(self.id), isofile)
+        #else:
+        #    return 'Created image: %s' % \
+        #           os.path.join(koji.pathinfo.imageFinalPath(),
+        #                        koji.pathinfo.livecdRelPath(image_id), isofile)
 
 ######################################################################
 # Ending Line---------------------------------------------------------
@@ -3895,3 +3981,5 @@ if __name__ == "__main__":
     elif not options.skip_main:
         koji.add_stderr_logger("koji")
         main(options, session)
+
+
